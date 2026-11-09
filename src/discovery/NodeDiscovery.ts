@@ -378,7 +378,7 @@ export class NodeDiscovery
                         urls: match.urls,
                         username: match.node?.username,
                         credentials: match.node?.credentials
-                    }, filter?.maxConnections ?? -1);
+                    }, filter?.maxConnections || -1);
                 }
             },
             nodeLost: () => undefined,

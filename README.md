@@ -104,8 +104,37 @@ The filter passed as the second argument has these optional fields:
 | `nodes` | Allowed nodes, as `{ nodeID, nodeName, username, credentials }`. Unset identifiers match any node |
 | `serviceNames` | Allowed service names |
 | `transportSchemes` | Allowed URL schemes, such as `rr+tcp` |
-| `predicate` | A function that receives the service information and returns whether to use it. It can examine `attributes` |
-| `maxConnections` | The most services to connect to at once |
+| `attributes` | Conditions on the service attributes, as an object or `Map` from attribute name to a group, described below |
+| `attributesMatchOperation` | How the conditions combine: `"and"` (the default), `"or"`, `"nor"`, or `"nand"` |
+| `predicate` | A function that receives the service information and returns whether to use it |
+| `maxConnections` | The most services to connect to at once. Zero or unset for no limit |
+
+Attribute conditions behave as in Core:
+
+```js
+import {
+    createServiceSubscriptionFilterAttributeIdentifier,
+    createServiceSubscriptionFilterAttributeRegex,
+    ServiceSubscriptionFilterAttribute,
+    ServiceSubscriptionFilterAttributeGroup
+} from "robotraconteur-node";
+
+const subscription = discovery.subscribeServiceByType("com.robotraconteur.robotics.robot.Robot", {
+    attributes: {
+        // Any one of these values
+        vendor: new ServiceSubscriptionFilterAttributeGroup("or", [
+            new ServiceSubscriptionFilterAttribute("abb"),
+            createServiceSubscriptionFilterAttributeRegex("universal.*")
+        ]),
+        // An identifier written as "name|uuid", matching by name alone here
+        device: new ServiceSubscriptionFilterAttributeGroup("and", [
+            createServiceSubscriptionFilterAttributeIdentifier("left_arm", "")
+        ])
+    }
+});
+```
+
+A group combines its attributes and any nested groups with `"or"` (the default), `"and"`, `"nor"`, or `"nand"`. A string attribute is split at commas into a list of values, unless the group's `splitStringAttribute` is `false`, and a value in the list only has to match one attribute of an `"or"` group. List and map attributes are matched by their string values, and `new ServiceSubscriptionFilterAttribute("key", "value")` matches one entry of a map. A regular expression must match the entire value. A missing attribute counts as an empty list, which matches an empty group or a `"nor"` group.
 
 Without a filter, a subscription tries every service of the type, including any that need a password. A service that fails to connect 25 times in a row is dropped until it is announced again.
 

@@ -19,7 +19,7 @@ import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { RobotRaconteurNode } from "robotraconteur";
-import { NodeDiscovery, TcpTransport } from "../../src/index.js";
+import { createServiceSubscriptionFilterAttributeRegex, NodeDiscovery, ServiceSubscriptionFilterAttribute, ServiceSubscriptionFilterAttributeGroup, TcpTransport } from "../../src/index.js";
 import type { NodeDiscoveryInfo } from "../../src/index.js";
 import { root, startTestServer, TestServer } from "./TestServer.js";
 
@@ -156,6 +156,36 @@ describe("node discovery", { skip: has_link_local ? false : "no IPv6 link-local 
         finally
         {
             [...subs, matching].forEach((s) => s.close());
+        }
+    });
+
+    test("attribute filters use the attributes reported by the service", { timeout: 40000 }, async () =>
+    {
+        const group = (...a: ServiceSubscriptionFilterAttribute[]) => new ServiceSubscriptionFilterAttributeGroup("or", a);
+        const exact = new ServiceSubscriptionFilterAttribute("This is a test attribute");
+        type Conditions = Record<string, ServiceSubscriptionFilterAttributeGroup>;
+        const subscribe = (attributes: Conditions) => discovery.subscribeServiceByType(TYPE, { serviceNames: [SERVICE], attributes });
+        const matching = ([
+            { test: group(exact) },
+            { test: group(createServiceSubscriptionFilterAttributeRegex("This is .* attribute")) },
+            { missing_attribute: new ServiceSubscriptionFilterAttributeGroup("nor", [exact]) }
+        ] as Conditions[]).map(subscribe);
+        const excluded = ([
+            { test: group(new ServiceSubscriptionFilterAttribute("Some other value")) },
+            { test: group(createServiceSubscriptionFilterAttributeRegex("is a test")) },
+            // A numeric attribute cannot match a string
+            { test2: group(new ServiceSubscriptionFilterAttribute("42")) },
+            { missing_attribute: group(exact) }
+        ] as Conditions[]).map(subscribe);
+        try
+        {
+            for (const s of matching) await s.getDefaultClientWait(20000);
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            for (const s of excluded) assert.equal(s.getConnectedClients().length, 0);
+        }
+        finally
+        {
+            [...matching, ...excluded].forEach((s) => s.close());
         }
     });
 

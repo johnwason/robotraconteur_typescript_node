@@ -13,6 +13,8 @@
 // limitations under the License.
 
 import type { NodeID } from "robotraconteur";
+import { attributesMatch } from "./AttributeFilter.js";
+import type { ServiceSubscriptionFilterAttributeGroup, ServiceSubscriptionFilterAttributeGroupOperation } from "./AttributeFilter.js";
 import type { NodeStorage, ServiceInfo2 } from "./NodeDiscovery.js";
 
 /** A node allowed by a filter. Leave nodeID and nodeName unset to match any node */
@@ -32,9 +34,13 @@ export interface ServiceSubscriptionFilter
     serviceNames?: string[];
     /** Allowed URL schemes, for example "rr+tcp" */
     transportSchemes?: string[];
-    /** A custom check, which can examine the service attributes */
+    /** Conditions on the service attributes, by attribute name */
+    attributes?: Map<string, ServiceSubscriptionFilterAttributeGroup> | Record<string, ServiceSubscriptionFilterAttributeGroup>;
+    /** How the conditions in attributes combine. Defaults to "and" */
+    attributesMatchOperation?: ServiceSubscriptionFilterAttributeGroupOperation;
+    /** A custom check of the service information */
     predicate?: (info: ServiceInfo2) => boolean;
-    /** The most services to connect to at once */
+    /** The most services to connect to at once. Zero or unset for no limit */
     maxConnections?: number;
 }
 
@@ -81,6 +87,10 @@ export function filterService(types: string[], filter: ServiceSubscriptionFilter
     if (urls.length === 0) return null;
 
     if (filter.serviceNames && filter.serviceNames.length > 0 && !filter.serviceNames.includes(info.name)) return null;
+    if (filter.attributes && (filter.attributes instanceof Map ? filter.attributes.size > 0 : Object.keys(filter.attributes).length > 0))
+    {
+        if (!attributesMatch(filter.attributes, filter.attributesMatchOperation ?? "and", info.attributes)) return null;
+    }
     if (filter.predicate && !filter.predicate(info)) return null;
 
     return { urls, node };
