@@ -1,0 +1,14 @@
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "target": "ES2020",
+        "noEmit": true,
+        "rootDir": "..",
+        "paths": {
+            "@shared/*": ["../robotraconteur_typescript/*"],
+            "robotraconteur": ["../robotraconteur_typescript/src/index.ts"],
+            "robotraconteur/internal": ["../robotraconteur_typescript/src/internal.ts"]
+        }
+    },
+    "include": ["src/**/*.ts", "test/**/*.ts"]
+}
