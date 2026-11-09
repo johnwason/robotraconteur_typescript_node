@@ -15,5 +15,7 @@
 export { TcpTransport } from "./transports/TcpTransport.js";
 export { IPNodeDiscoveryFlags, parseNodeAnnouncement } from "./transports/IPNodeDiscovery.js";
 export type { NodeAnnouncement } from "./transports/IPNodeDiscovery.js";
-export { connectServiceCandidates, NodeDiscovery } from "./discovery/NodeDiscovery.js";
+export { NodeDiscovery } from "./discovery/NodeDiscovery.js";
+export { ServiceInfo2Subscription } from "./discovery/Subscriptions.js";
+export type { ServiceInfo2Handler, ServiceSubscriptionFilter, ServiceSubscriptionFilterNode } from "./discovery/Subscriptions.js";
 export type { NodeDetectedHandler, NodeDiscoveryInfo, NodeDiscoveryOptions, NodeInfo2, NodeLostHandler, ServiceInfo2 } from "./discovery/NodeDiscovery.js";

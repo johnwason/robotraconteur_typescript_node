@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { RobotRaconteurNode } from "robotraconteur";
 import { clientTests } from "@shared/test/common/ClientTests.js";
+import { subscriptionTests, TcpProxy } from "@shared/test/common/SubscriptionTests.js";
 import type { Vectors } from "@shared/test/common/ClientTests.js";
 import { TcpTransport } from "../../src/index.js";
 import { loadVectors, startTestServer, TestServer } from "./TestServer.js";
@@ -25,15 +26,19 @@ const node = new RobotRaconteurNode();
 node.requestTimeout = 30000;
 node.registerTransport(new TcpTransport(node));
 let server: TestServer;
+let proxy: TcpProxy;
 
 before(async () =>
 {
     assert.ok(process.env.RR_CORE_TEST, "RR_CORE_TEST must point at the Core test directory");
     server = await startTestServer();
+    proxy = new TcpProxy(server.port);
+    await proxy.start();
 }, { timeout: 60000 });
 
 after(async () =>
 {
+    proxy.close();
     await node.shutdown();
     server.stop();
 });
@@ -41,6 +46,14 @@ after(async () =>
 test("shared client tests over rr+tcp", { timeout: 300000 }, async (t) =>
 {
     for (const c of clientTests(node, server.port, vectors, "rr+tcp"))
+    {
+        await t.test(c.name, () => c.run());
+    }
+});
+
+test("subscriptions over rr+tcp", { timeout: 120000 }, async (t) =>
+{
+    for (const c of subscriptionTests(node, proxy, server.port, "rr+tcp", (n) => new TcpTransport(n)))
     {
         await t.test(c.name, () => c.run());
     }

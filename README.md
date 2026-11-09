@@ -2,7 +2,7 @@
 
 Node.js additions for the [robotraconteur](https://github.com/johnwason/robotraconteur_typescript) TypeScript client: the `rr+tcp` transport and discovery of nodes and services on the network. Browsers cannot use TCP sockets or UDP, so these live in a separate package and the browser library stays small.
 
-**Status:** early development. The client side of TCP and discovery is implemented. Services and servers, TLS (`rrs+tcp`), the Local transport, and subscriptions are not.
+**Status:** early development. The client side of TCP, discovery, and subscriptions by service type are implemented. Services and servers, TLS (`rrs+tcp`), and the Local transport are not.
 
 Requires Node.js 22 or newer.
 
@@ -44,7 +44,7 @@ await node.shutdown();
 
 ```js
 import { RobotRaconteurNode } from "robotraconteur";
-import { connectServiceCandidates, NodeDiscovery, TcpTransport } from "robotraconteur-node";
+import { NodeDiscovery, TcpTransport } from "robotraconteur-node";
 
 const node = new RobotRaconteurNode();
 const tcp = new TcpTransport(node);
@@ -54,7 +54,7 @@ const discovery = new NodeDiscovery(node, tcp);
 await discovery.start();
 
 const services = await discovery.findServiceByType("experimental.reynard_the_robot.Reynard");
-const reynard = await connectServiceCandidates(node, services[0].connectionURLs);
+const reynard = await node.connectService(services[0].connectionURLs);
 ```
 
 See [examples/find_service.mjs](examples/find_service.mjs) for a complete program.
@@ -65,7 +65,6 @@ See [examples/find_service.mjs](examples/find_service.mjs) for a complete progra
 | `discovery.findNodeByName(name, schemes?)`, `discovery.findNodeByID(id, schemes?)` | Nodes: `nodeID`, `nodeName`, `connectionURLs` |
 | `discovery.detectedNodes` | Nodes currently known. This information has not been verified |
 | `discovery.addNodeDetectedListener(fn)`, `discovery.addNodeLostListener(fn)` | Notifications, with matching remove functions. A node is lost one minute after its last announcement |
-| `connectServiceCandidates(node, urls, username?, credentials?, objectType?)` | Connects using several URLs for one service and keeps the first that works |
 
 Nodes are found using IPv6 link-local multicast by default, as in Core. Core services do not announce over IPv4 unless started with `--robotraconteur-tcp-ipv4-discovery=true`. To also search over IPv4:
 
@@ -76,6 +75,41 @@ const discovery = new NodeDiscovery(node, tcp, {
 ```
 
 Discovery listens on UDP port 48653, and the firewall must allow it. Information from the network is unverified, so anything that acts on discovered services should check them against what it expects.
+
+## Subscriptions
+
+A subscription finds services and keeps them connected. Subscriptions to a known URL are in the `robotraconteur` package, using `subscribeService`, and work in browsers. Finding services by type needs discovery, so that is here:
+
+```js
+const subscription = discovery.subscribeServiceByType("experimental.reynard_the_robot.Reynard", {
+    serviceNames: ["reynard"]
+});
+
+const state = subscription.subscribeWire("state");
+await state.waitInValueValid();
+console.log(state.getInValue().value.robot_position);
+
+const reynard = await subscription.getDefaultClientWait(5000);
+await reynard.callFunction("say", ["Hello!"]);
+
+subscription.close();
+```
+
+The wire, pipe, and client functions are described in the [robotraconteur README](https://github.com/johnwason/robotraconteur_typescript/tree/node-split#staying-connected). A subscription keeps the program running until it is closed or `node.shutdown()` is called.
+
+The filter passed as the second argument has these optional fields:
+
+| Field | Meaning |
+| --- | --- |
+| `nodes` | Allowed nodes, as `{ nodeID, nodeName, username, credentials }`. Unset identifiers match any node |
+| `serviceNames` | Allowed service names |
+| `transportSchemes` | Allowed URL schemes, such as `rr+tcp` |
+| `predicate` | A function that receives the service information and returns whether to use it. It can examine `attributes` |
+| `maxConnections` | The most services to connect to at once |
+
+Without a filter, a subscription tries every service of the type, including any that need a password. A service that fails to connect 25 times in a row is dropped until it is announced again.
+
+`discovery.subscribeServiceInfo2(types, filter)` tracks services without connecting to them, with `getDetectedServiceInfo2()`, `addServiceDetectedListener`, and `addServiceLostListener`.
 
 ## Developing
 

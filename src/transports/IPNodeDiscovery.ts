@@ -155,6 +155,15 @@ export class IPNodeDiscovery
         this.sendDiscoveryRequest();
     }
 
+    setKeepAlive(keep_alive: boolean): void
+    {
+        for (const s of this.sockets)
+        {
+            if (keep_alive) s.ref();
+            else s.unref();
+        }
+    }
+
     private async listen(type: "udp4" | "udp6", address: string): Promise<Socket | null>
     {
         const socket = createSocket({ type, reuseAddr: true, ipv6Only: type === "udp6" });

@@ -19,7 +19,7 @@ import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { RobotRaconteurNode } from "robotraconteur";
-import { connectServiceCandidates, NodeDiscovery, TcpTransport } from "../../src/index.js";
+import { NodeDiscovery, TcpTransport } from "../../src/index.js";
 import type { NodeDiscoveryInfo } from "../../src/index.js";
 import { root, startTestServer, TestServer } from "./TestServer.js";
 
@@ -67,7 +67,7 @@ describe("node discovery", { skip: has_link_local ? false : "no IPv6 link-local 
         assert.equal(s.nodeName, remote.name);
         assert.ok(s.connectionURLs.length > 0);
 
-        const r = await connectServiceCandidates(node, s.connectionURLs);
+        const r = await node.connectService(s.connectionURLs);
         assert.equal(r.objectType, TYPE);
         await node.disconnectService(r);
     });
@@ -96,9 +96,120 @@ describe("node discovery", { skip: has_link_local ? false : "no IPv6 link-local 
         assert.equal(by_id[0]!.nodeName, remote.name);
 
         const urls = n.connectionURLs.map((u) => `${u}&service=${SERVICE}`);
-        const r = await connectServiceCandidates(node, urls);
+        const r = await node.connectService(urls);
         assert.equal(r.objectType, TYPE);
         await node.disconnectService(r);
+    });
+
+    const until = async (condition: () => boolean, what: string) =>
+    {
+        const deadline = Date.now() + 20000;
+        while (!condition())
+        {
+            if (Date.now() > deadline) throw new Error("Timed out waiting for " + what);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+    };
+
+    test("a subscription by type connects and keeps the service connected", { timeout: 40000 }, async () =>
+    {
+        const s = discovery.subscribeServiceByType(TYPE, { serviceNames: [SERVICE] });
+        s.connectRetryDelay = 50;
+        try
+        {
+            const first = await s.getDefaultClientWait(20000);
+            assert.equal(first.objectType, TYPE);
+            assert.equal(s.getConnectedClients().length, 1, "only the named service should connect");
+            assert.equal(s.getConnectedClients()[0]!.serviceName, SERVICE);
+
+            const w = s.subscribeWire("w1");
+            await until(() => w.activeConnectionCount === 1, "wire connection");
+
+            await node.disconnectService(first);
+            await until(() => s.tryGetDefaultClient() !== null && s.tryGetDefaultClient() !== first, "reconnection");
+            await until(() => w.activeConnectionCount === 1, "wire to reconnect");
+            w.setOutValueAll(Float64Array.of(42));
+            assert.ok(await w.waitInValueValid(20000));
+        }
+        finally
+        {
+            s.close();
+        }
+    });
+
+    test("subscription filters limit the services used", { timeout: 40000 }, async () =>
+    {
+        const options = [
+            { nodes: [{ nodeName: "no_such_node" }], serviceNames: [SERVICE] },
+            { serviceNames: ["no_such_service"] },
+            { predicate: () => false },
+            { transportSchemes: ["rr+nothing"] }
+        ];
+        const subs = options.map((o) => discovery.subscribeServiceByType(TYPE, o));
+        const matching = discovery.subscribeServiceByType(TYPE, { nodes: [{ nodeName: remote.name }], serviceNames: [SERVICE], predicate: (i) => i.name === SERVICE });
+        try
+        {
+            await matching.getDefaultClientWait(20000);
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            for (const s of subs) assert.equal(s.getConnectedClients().length, 0);
+        }
+        finally
+        {
+            [...subs, matching].forEach((s) => s.close());
+        }
+    });
+
+    test("a subscription can be limited to one connection", { timeout: 40000 }, async () =>
+    {
+        const s = discovery.subscribeServiceByType(TYPE, { maxConnections: 1 });
+        s.connectRetryDelay = 50;
+        try
+        {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            assert.ok(s.getConnectedClients().length <= 1);
+        }
+        finally
+        {
+            s.close();
+        }
+    });
+
+    test("a type subscription needs discovery to be started", () =>
+    {
+        const n = new NodeDiscovery(node, tcp);
+        assert.throws(() => n.subscribeServiceByType(TYPE));
+    });
+
+    test("service information subscriptions report detected and lost services", { timeout: 40000 }, async () =>
+    {
+        // A separate node, so that expiring its nodes does not affect the other tests
+        const n2 = new RobotRaconteurNode();
+        const t2 = new TcpTransport(n2);
+        n2.registerTransport(t2);
+        const d2 = new NodeDiscovery(n2, t2, { nodeExpiration: 2500 });
+        await d2.start();
+        try
+        {
+            const s = d2.subscribeServiceInfo2(TYPE, { serviceNames: [SERVICE] });
+            const detected_names: string[] = [];
+            const lost_names: string[] = [];
+            s.addServiceDetectedListener((_, i) => detected_names.push(i.name));
+            s.addServiceLostListener((_, i) => lost_names.push(i.name));
+
+            await until(() => detected_names.includes(SERVICE), "service to be detected");
+            assert.deepEqual(s.getDetectedServiceInfo2().map((i) => i.name), [SERVICE]);
+            assert.equal(s.getDetectedServiceInfo2()[0]!.rootObjectType, TYPE);
+
+            // Nothing is requested after this, so the node expires before it next announces
+            await until(() => lost_names.includes(SERVICE), "service to be lost");
+            assert.deepEqual(s.getDetectedServiceInfo2(), []);
+            s.close();
+        }
+        finally
+        {
+            d2.close();
+            await n2.shutdown();
+        }
     });
 
     test("the built package works from plain JavaScript", { timeout: 30000 }, async () =>

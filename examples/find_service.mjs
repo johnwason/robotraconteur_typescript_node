@@ -5,7 +5,7 @@
 //    A service name can be added after the type, to choose between several services of that type.
 
 import { RobotRaconteurNode } from "robotraconteur";
-import { connectServiceCandidates, NodeDiscovery, TcpTransport } from "../dist/index.js";
+import { NodeDiscovery, TcpTransport } from "../dist/index.js";
 
 const [serviceType, serviceName] = process.argv.slice(2);
 if (!serviceType) {
@@ -27,7 +27,7 @@ for (const service of services) {
 
 const service = serviceName ? services.find((s) => s.name === serviceName) : services[0];
 if (service) {
-    const client = await connectServiceCandidates(node, service.connectionURLs);
+    const client = await node.connectService(service.connectionURLs);
     console.log("Connected to object of type", client.objectType);
     await node.disconnectService(client);
 }

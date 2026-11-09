@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { NodeID, parseConnectionUrl, RobotRaconteurNode, ServiceStub } from "robotraconteur";
+import { NodeID, parseConnectionUrl, RobotRaconteurError, RobotRaconteurNode, ServiceSubscription } from "robotraconteur";
+import { MessageErrorType } from "robotraconteur/internal";
 import { IPNodeDiscoveryFlags } from "../transports/IPNodeDiscovery.js";
 import type { NodeAnnouncement } from "../transports/IPNodeDiscovery.js";
 import type { TcpTransport } from "../transports/TcpTransport.js";
+import { filterService, ServiceInfo2Subscription } from "./Subscriptions.js";
+import type { DiscoverySubscriber, ServiceSubscriptionFilter } from "./Subscriptions.js";
 
 /** A node seen on the network. The information has not been verified */
 export interface NodeDiscoveryInfo
@@ -41,7 +44,7 @@ export interface ServiceInfo2
     name: string;
     rootObjectType: string;
     rootObjectImplements: string[];
-    /** Candidate URLs, which can be passed to connectServiceCandidates */
+    /** Candidate URLs, which can be passed to connectService */
     connectionURLs: string[];
     attributes: Map<string, unknown>;
     nodeID: NodeID;
@@ -58,12 +61,25 @@ export interface NodeDiscoveryOptions
     discoveryWait?: number;
     /** Limit for interrogating one node for its services, in milliseconds */
     serviceTimeout?: number;
+    /** A node is lost when nothing has been heard from it for this long, in milliseconds */
+    nodeExpiration?: number;
+}
+
+/** What is known about a detected node */
+export interface NodeStorage
+{
+    info: NodeDiscoveryInfo;
+    services: ServiceInfo2[] | null;
+    last_update_nonce: string;
+    updated: boolean;
+    updating: boolean;
+    retry_window_start: number;
+    retry_count: number;
 }
 
 export type NodeDetectedHandler = (info: NodeDiscoveryInfo) => void;
 export type NodeLostHandler = (info: NodeDiscoveryInfo) => void;
 
-const NODE_EXPIRATION_MS = 60000;
 const MAX_NODES = 1000;
 const MAX_URLS_PER_NODE = 256;
 
@@ -108,38 +124,22 @@ function withTimeout<T>(p: Promise<T>, ms: number, on_late: (v: T) => void): Pro
     });
 }
 
-/**
- * Connect using several candidate URLs for one service, keeping the first that succeeds. Discovery
- * reports one URL for each network path to a node, and not all of them work from here.
- */
-export async function connectServiceCandidates(node: RobotRaconteurNode, urls: string[], username?: string, credentials?: Map<string, unknown> | Record<string, unknown>, objectType?: string): Promise<ServiceStub>
+function randomInt(low: number, high: number): number
 {
-    let winner: ServiceStub | undefined;
-    const attempts = urls.map(async (url) =>
-    {
-        const stub = await node.connectService(url, username, credentials, objectType);
-        if (winner)
-        {
-            void node.disconnectService(stub).catch(() => undefined);
-            throw new Error("Another connection was made first");
-        }
-        winner = stub;
-        return stub;
-    });
-    try
-    {
-        return await Promise.any(attempts);
-    }
-    catch (e)
-    {
-        throw (e as AggregateError).errors?.[0] ?? e;
-    }
+    return low + Math.floor(Math.random() * (high - low));
+}
+
+function sleepInBackground(ms: number): Promise<void>
+{
+    return new Promise((resolve) => setTimeout(resolve, ms).unref());
 }
 
 /** Finds nodes and services on the network. Node.js only, as browsers cannot use UDP */
 export class NodeDiscovery
 {
-    private nodes = new Map<string, NodeDiscoveryInfo>();
+    private nodes = new Map<string, NodeStorage>();
+    private subscribers = new Set<DiscoverySubscriber>();
+    private started = false;
     private detected_listeners = new Set<NodeDetectedHandler>();
     private lost_listeners = new Set<NodeLostHandler>();
     private cleanup_timer: ReturnType<typeof setInterval> | undefined;
@@ -148,6 +148,7 @@ export class NodeDiscovery
     private readonly schemes: string[];
     private readonly discovery_wait: number;
     private readonly service_timeout: number;
+    private readonly node_expiration: number;
 
     constructor(private node: RobotRaconteurNode, private transport: TcpTransport, options: NodeDiscoveryOptions = {})
     {
@@ -155,18 +156,23 @@ export class NodeDiscovery
         this.schemes = options.schemes ?? ["rr+tcp"];
         this.discovery_wait = options.discoveryWait ?? 1500;
         this.service_timeout = options.serviceTimeout ?? 5000;
+        this.node_expiration = options.nodeExpiration ?? 60000;
     }
 
     /** Start listening for nodes */
     async start(): Promise<void>
     {
         await this.transport.enableNodeDiscoveryListening((a) => this.nodeAnnounced(a), this.flags);
-        this.cleanup_timer = setInterval(() => this.cleanNodes(), 5000);
+        this.cleanup_timer = setInterval(() => this.cleanNodes(), Math.min(5000, this.node_expiration));
         this.cleanup_timer.unref();
+        this.started = true;
     }
 
+    /** Stop listening and close any subscriptions */
     close(): void
     {
+        this.started = false;
+        for (const s of [...this.subscribers]) s.close();
         clearInterval(this.cleanup_timer);
         this.transport.disableNodeDiscoveryListening();
     }
@@ -174,7 +180,7 @@ export class NodeDiscovery
     /** The nodes currently known. Their information has not been verified */
     get detectedNodes(): NodeDiscoveryInfo[]
     {
-        return [...this.nodes.values()];
+        return [...this.nodes.values()].map((n) => n.info);
     }
 
     addNodeDetectedListener(handler: NodeDetectedHandler): void
@@ -216,35 +222,180 @@ export class NodeDiscovery
     {
         const key = a.nodeID.toString();
         const now = Date.now();
-        let info = this.nodes.get(key);
-        if (!info)
+        const storage = this.nodes.get(key);
+        if (!storage)
         {
             if (this.nodes.size >= MAX_NODES) return;
-            info = { nodeID: a.nodeID, nodeName: a.nodeName, urls: [{ url: a.url, lastAnnounceTime: now }], serviceStateNonce: a.serviceStateNonce };
-            this.nodes.set(key, info);
-            this.notify(this.detected_listeners, info);
+            const added: NodeStorage = {
+                info: { nodeID: a.nodeID, nodeName: a.nodeName, urls: [{ url: a.url, lastAnnounceTime: now }], serviceStateNonce: a.serviceStateNonce },
+                services: null,
+                last_update_nonce: "",
+                updated: false,
+                updating: false,
+                retry_window_start: now,
+                retry_count: 0
+            };
+            this.nodes.set(key, added);
+            this.notify(this.detected_listeners, added.info);
+            if (this.subscribers.size > 0) void this.updateServiceInfo(added, 0);
             return;
         }
 
+        const info = storage.info;
         info.nodeName = a.nodeName;
         if (a.serviceStateNonce !== "") info.serviceStateNonce = a.serviceStateNonce;
         const existing = info.urls.find((u) => u.url === a.url);
         if (existing) existing.lastAnnounceTime = now;
         else if (info.urls.length < MAX_URLS_PER_NODE) info.urls.push({ url: a.url, lastAnnounceTime: now });
+
+        if (this.subscribers.size > 0 && this.needsUpdate(storage)) this.retryUpdateServiceInfo(storage);
+    }
+
+    /** Services can only have changed if the announced nonce changed. Some nodes do not send one */
+    private needsUpdate(storage: NodeStorage): boolean
+    {
+        return storage.info.serviceStateNonce === "" || storage.info.serviceStateNonce !== storage.last_update_nonce;
+    }
+
+    private retryUpdateServiceInfo(storage: NodeStorage): void
+    {
+        if (storage.updating) return;
+
+        const now = Date.now();
+        if (now > storage.retry_window_start + 60000)
+        {
+            storage.retry_window_start = now;
+            storage.retry_count = 0;
+        }
+
+        const retry = storage.retry_count++;
+        let backoff = randomInt(100, 600);
+        if (retry > 12) backoff = randomInt(25000, 35000);
+        else if (retry > 8) backoff = randomInt(9000, 11000);
+        else if (retry > 5) backoff = randomInt(4500, 5500);
+        else if (retry > 3) backoff = randomInt(2000, 2500);
+
+        if (storage.info.serviceStateNonce === "" && storage.updated) backoff += 15000;
+        void this.updateServiceInfo(storage, backoff);
+    }
+
+    private async updateServiceInfo(storage: NodeStorage, backoff: number): Promise<void>
+    {
+        if (storage.updating) return;
+        storage.updating = true;
+        const nonce = storage.info.serviceStateNonce;
+        let services: ServiceInfo2[];
+        try
+        {
+            // Nodes are often found together, so spread out the connections
+            await sleepInBackground(randomInt(100, 600) + backoff);
+            services = await this.localNodeServices(storage.info, this.matchingUrls(storage.info, this.schemes));
+        }
+        catch
+        {
+            storage.updating = false;
+            if (this.subscribers.size > 0 && this.nodes.has(storage.info.nodeID.toString())) this.retryUpdateServiceInfo(storage);
+            return;
+        }
+        storage.updating = false;
+        storage.services = services;
+        storage.last_update_nonce = nonce;
+        storage.updated = true;
+
+        if (storage.info.serviceStateNonce !== nonce)
+        {
+            // The services changed while this update was running
+            void sleepInBackground(5000).then(() =>
+            {
+                if (this.subscribers.size > 0) this.retryUpdateServiceInfo(storage);
+            });
+        }
+        else
+        {
+            storage.retry_count = 0;
+        }
+
+        for (const s of this.subscribers) s.nodeUpdated(storage);
     }
 
     private cleanNodes(): void
     {
         const now = Date.now();
-        for (const [key, info] of [...this.nodes])
+        for (const [key, storage] of [...this.nodes])
         {
-            info.urls = info.urls.filter((u) => now - u.lastAnnounceTime < NODE_EXPIRATION_MS);
-            if (info.urls.length === 0)
+            storage.info.urls = storage.info.urls.filter((u) => now - u.lastAnnounceTime < this.node_expiration);
+            if (storage.info.urls.length === 0)
             {
                 this.nodes.delete(key);
-                this.notify(this.lost_listeners, info);
+                this.notify(this.lost_listeners, storage.info);
+                for (const s of this.subscribers) s.nodeLost(storage);
             }
         }
+    }
+
+    private addSubscriber(subscriber: DiscoverySubscriber): void
+    {
+        if (!this.started)
+        {
+            throw new RobotRaconteurError(MessageErrorType.InvalidOperation, "RobotRaconteur.InvalidOperation", "Call start() before subscribing");
+        }
+        if (this.subscribers.size === 0) this.transport.setDiscoveryKeepAlive(true);
+        this.subscribers.add(subscriber);
+
+        this.transport.sendDiscoveryRequest();
+        for (const storage of this.nodes.values())
+        {
+            if (this.needsUpdate(storage) || !storage.updated) this.retryUpdateServiceInfo(storage);
+            subscriber.nodeUpdated(storage);
+        }
+    }
+
+    private removeSubscriber(subscriber: DiscoverySubscriber): void
+    {
+        this.subscribers.delete(subscriber);
+        if (this.subscribers.size === 0) this.transport.setDiscoveryKeepAlive(false);
+    }
+
+    /**
+     * Connect to every service of the given types that is found, now or later, and keep them
+     * connected. Types are matched against the root object and the types it implements.
+     */
+    subscribeServiceByType(serviceTypes: string | string[], filter?: ServiceSubscriptionFilter): ServiceSubscription
+    {
+        const types = typeof serviceTypes === "string" ? [serviceTypes] : serviceTypes;
+        const subscription = new ServiceSubscription(this.node, { connectRetryDelay: 15000, connectErrorLimit: 25 });
+        const subscriber: DiscoverySubscriber = {
+            nodeUpdated: (storage) =>
+            {
+                for (const service of storage.services ?? [])
+                {
+                    const match = filterService(types, filter, storage, service);
+                    if (!match) continue;
+                    subscription.addOrUpdateClient({
+                        nodeID: service.nodeID,
+                        nodeName: service.nodeName,
+                        serviceName: service.name,
+                        urls: match.urls,
+                        username: match.node?.username,
+                        credentials: match.node?.credentials
+                    }, filter?.maxConnections ?? -1);
+                }
+            },
+            nodeLost: () => undefined,
+            close: () => subscription.close()
+        };
+        subscription.addCloseListener(() => this.removeSubscriber(subscriber));
+        this.addSubscriber(subscriber);
+        return subscription;
+    }
+
+    /** Track which services of the given types exist on the network, without connecting to them */
+    subscribeServiceInfo2(serviceTypes: string | string[], filter?: ServiceSubscriptionFilter): ServiceInfo2Subscription
+    {
+        const types = typeof serviceTypes === "string" ? [serviceTypes] : serviceTypes;
+        const subscription = new ServiceInfo2Subscription(types, filter, (s) => this.removeSubscriber(s));
+        this.addSubscriber(subscription);
+        return subscription;
     }
 
     /** Ask nodes to announce themselves and wait for the responses */
@@ -261,7 +412,7 @@ export class NodeDiscovery
 
     private async localNodeServices(info: NodeDiscoveryInfo, urls: string[]): Promise<ServiceInfo2[]>
     {
-        const stub = await withTimeout(connectServiceCandidates(this.node, urls), this.service_timeout, (s) =>
+        const stub = await withTimeout(this.node.connectService(urls), this.service_timeout, (s) =>
         {
             void this.node.disconnectService(s).catch(() => undefined);
         });
@@ -310,8 +461,8 @@ export class NodeDiscovery
     async findNodeByID(id: NodeID, schemes = this.schemes): Promise<NodeInfo2[]>
     {
         await this.updateDetectedNodes();
-        const info = this.nodes.get(id.toString());
-        return info ? this.nodeInfo(info, schemes) : [];
+        const storage = this.nodes.get(id.toString());
+        return storage ? this.nodeInfo(storage.info, schemes) : [];
     }
 
     async findNodeByName(name: string, schemes = this.schemes): Promise<NodeInfo2[]>

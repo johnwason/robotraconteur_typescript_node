@@ -184,6 +184,12 @@ export class TcpTransport implements Transport, StreamTransportParent
         this.discovery = null;
     }
 
+    /** Whether listening for nodes keeps the process running, as a subscription should */
+    setDiscoveryKeepAlive(keep_alive: boolean): void
+    {
+        this.discovery?.setKeepAlive(keep_alive);
+    }
+
     /** Ask nodes to announce themselves now, instead of waiting for their periodic announcement */
     sendDiscoveryRequest(): void
     {
