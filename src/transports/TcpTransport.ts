@@ -17,7 +17,8 @@ import { networkInterfaces } from "node:os";
 import { parseConnectionUrl } from "robotraconteur";
 import type { Endpoint, ITransportConnection, RobotRaconteurNode, Transport } from "robotraconteur";
 import { connectionError, StreamClientConnection } from "robotraconteur/internal";
-import type { SocketAdapter, StreamTransportParent } from "robotraconteur/internal";
+import type { SocketAdapter, SocketEvents, StreamTransportParent } from "robotraconteur/internal";
+import type { WebSocket as WsWebSocket } from "ws";
 import { interfaceScope, isIPv6LinkLocal } from "./NetworkUtil.js";
 import { IPNodeDiscovery, IPNodeDiscoveryFlags } from "./IPNodeDiscovery.js";
 import type { NodeAnnouncement } from "./IPNodeDiscovery.js";
@@ -56,6 +57,78 @@ class TcpSocketAdapter implements SocketAdapter
     {
         this.socket.destroy();
     }
+}
+
+const WEBSOCKET_PROTOCOL = "robotraconteur.robotraconteur.com";
+/** A send waits for the data to reach the socket once this many bytes are queued, as for a TCP socket */
+const WEBSOCKET_SEND_HIGH_WATER_MARK = 16 * 1024;
+
+/** Options for rr+ws and rr+wss connections, such as a certificate authority for a private server */
+export interface WebSocketClientOptions
+{
+    /** Certificate authorities to trust in place of the defaults */
+    ca?: string | Buffer | (string | Buffer)[];
+    /** A client certificate and key, for servers that require one */
+    cert?: string | Buffer;
+    key?: string | Buffer;
+    /** Set false only for testing. Defaults to true */
+    rejectUnauthorized?: boolean;
+    headers?: Record<string, string>;
+}
+
+/** A WebSocket from the ws package. Each send reports when its data has been written to the socket */
+export class WebSocketAdapter implements SocketAdapter
+{
+    constructor(private ws: Pick<WsWebSocket, "readyState" | "bufferedAmount" | "send" | "terminate">) {}
+
+    write(frame: Uint8Array): Promise<void> | void
+    {
+        if (this.ws.readyState !== 1) return Promise.reject(connectionError("Transport connection closed"));
+        const sent = new Promise<void>((resolve, reject) =>
+        {
+            this.ws.send(frame, { binary: true }, (e) => (e ? reject(connectionError("Transport connection closed")) : resolve()));
+        });
+        // Like a socket write, continue at once while little is queued, and otherwise wait for it to be sent
+        if (this.ws.bufferedAmount < WEBSOCKET_SEND_HIGH_WATER_MARK)
+        {
+            sent.catch(() => undefined);
+            return;
+        }
+        return sent;
+    }
+
+    close(): void
+    {
+        this.ws.terminate();
+    }
+}
+
+async function openWebSocket(url: string, timeout: number, options: WebSocketClientOptions, events: SocketEvents): Promise<SocketAdapter>
+{
+    // Loaded only when needed, so that rr+tcp works without it
+    const { WebSocket } = await import("ws");
+    const ws = new WebSocket(url, WEBSOCKET_PROTOCOL, { ...options, handshakeTimeout: timeout, perMessageDeflate: false });
+    await new Promise<void>((resolve, reject) =>
+    {
+        const on_error = () =>
+        {
+            ws.terminate();
+            reject(connectionError("Could not connect to WebSocket endpoint"));
+        };
+        ws.once("error", on_error);
+        ws.once("open", () =>
+        {
+            ws.off("error", on_error);
+            resolve();
+        });
+    });
+    ws.on("message", (data, is_binary) =>
+    {
+        if (is_binary) events.onData(data as Buffer);
+    });
+    ws.on("error", () => undefined); // Always followed by close
+    ws.on("close", () => events.onClose());
+    return new WebSocketAdapter(ws);
 }
 
 function openSocket(host: string, port: number, timeout: number): Promise<Socket>
@@ -126,7 +199,10 @@ async function connectAny(hosts: string[], port: number, timeout: number): Promi
     }
 }
 
-/** Client transport for rr+tcp using a TCP socket, and discovery of nodes using UDP */
+/**
+ * Client transport for rr+tcp using a TCP socket, and for rr+ws and rr+wss using a WebSocket. Also
+ * discovers nodes using UDP.
+ */
 export class TcpTransport implements Transport, StreamTransportParent
 {
     /** Period for connection test messages in milliseconds */
@@ -135,6 +211,8 @@ export class TcpTransport implements Transport, StreamTransportParent
     defaultReceiveTimeout = 15000;
     defaultConnectTimeout = 5000;
     maxMessageSize = 12 * 1024 * 1024;
+    /** Options for rr+ws and rr+wss connections */
+    webSocketOptions: WebSocketClientOptions = {};
 
     private connections = new Set<StreamClientConnection>();
     private discovery: IPNodeDiscovery | null = null;
@@ -143,7 +221,7 @@ export class TcpTransport implements Transport, StreamTransportParent
 
     canConnectService(url: string): boolean
     {
-        return ["tcp", "rr+tcp"].includes(parseConnectionUrl(url).scheme);
+        return ["tcp", "rr+tcp", "rr+ws", "rr+wss"].includes(parseConnectionUrl(url).scheme);
     }
 
     async createTransportConnection(url: string, endpoint: Endpoint): Promise<ITransportConnection>
@@ -152,8 +230,14 @@ export class TcpTransport implements Transport, StreamTransportParent
         if (u.host === "") throw connectionError("Invalid connection URL for TCP");
 
         const c = new StreamClientConnection(this, u.nodeid, u.nodename, endpoint);
+        const websocket = u.scheme === "rr+ws" || u.scheme === "rr+wss";
         await c.connect(async (events) =>
         {
+            if (websocket)
+            {
+                const ws_url = url.replace(u.scheme + "://", (u.scheme === "rr+wss" ? "wss" : "ws") + "://");
+                return openWebSocket(ws_url, this.defaultConnectTimeout, this.webSocketOptions, events);
+            }
             const socket = await connectAny(candidateHosts(u.host), u.port, this.defaultConnectTimeout);
             socket.on("data", (data) => events.onData(data));
             socket.on("error", () => undefined); // Always followed by close

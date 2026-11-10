@@ -13,6 +13,7 @@
 // limitations under the License.
 
 export { TcpTransport } from "./transports/TcpTransport.js";
+export type { WebSocketClientOptions } from "./transports/TcpTransport.js";
 export { IPNodeDiscoveryFlags, parseNodeAnnouncement } from "./transports/IPNodeDiscovery.js";
 export type { NodeAnnouncement } from "./transports/IPNodeDiscovery.js";
 export { NodeDiscovery } from "./discovery/NodeDiscovery.js";

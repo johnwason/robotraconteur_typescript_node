@@ -40,6 +40,14 @@ await node.disconnectService(reynard);
 await node.shutdown();
 ```
 
+`TcpTransport` also connects to `rr+ws` and `rr+wss` URLs, using the [ws](https://www.npmjs.com/package/ws) package. Do not also register `BrowserWebSocketTransport`, which is for browsers. A server with a certificate from a private certificate authority can be trusted with `webSocketOptions`:
+
+```js
+const tcp = new TcpTransport(node);
+tcp.webSocketOptions = { ca: readFileSync("my-ca.pem") };
+node.registerTransport(tcp);
+```
+
 ## Finding services
 
 ```js

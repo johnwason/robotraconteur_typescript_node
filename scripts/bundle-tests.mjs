@@ -22,6 +22,8 @@ await build({
     target: "node22",
     sourcemap: "inline",
     logLevel: "warning",
+    // Loaded from node_modules at run time, along with its optional native modules
+    external: ["ws"],
     plugins: [{
         name: "shared-source",
         setup(b)
