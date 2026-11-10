@@ -32,6 +32,7 @@
         "build:test": "npm run build && tsc -p tsconfig.test.json && node scripts/bundle-tests.mjs",
         "test:unit": "npm run build:test && node --test \"dist-test/unit/*.test.mjs\"",
         "test:integration": "npm run build:test && node --test --test-concurrency=1 \"dist-test/integration/*.test.mjs\"",
+        "test:extra": "npm run build:test && node --test \"dist-test/extra/*.test.mjs\"",
         "test": "npm run build:test && node --test --test-concurrency=1 \"dist-test/unit/*.test.mjs\" \"dist-test/integration/*.test.mjs\""
     },
     "dependencies": {

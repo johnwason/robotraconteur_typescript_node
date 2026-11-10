@@ -177,9 +177,10 @@ cd ../robotraconteur_typescript_node
 podman build -t rr-ts-node-dev .
 ./scripts/podman-run.sh npm test
 RR_TEST_SERVER_SCRIPT=test/server/rr_cpp_test_server.py ./scripts/podman-run.sh npm test
+./scripts/podman-run.sh npm run test:extra
 ```
 
-The tests reuse the shared package's client test suite over `rr+tcp`, against Core's Python test server by default or its C++ test server when selected as above.
+The tests reuse the shared package's client test suite over `rr+tcp` and `rr+ws`, against Core's Python test server by default or its C++ test server when selected as above. `npm run test:extra` connects to public test servers, as Core's extra tests do, so it needs internet access and is not part of `npm test`.
 
 ## License
 

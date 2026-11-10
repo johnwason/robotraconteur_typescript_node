@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const shared = resolve(process.env.RR_SHARED ?? join(root, "../robotraconteur_typescript"));
 
-const entry_points = ["unit", "integration"].flatMap((d) =>
+const entry_points = ["unit", "integration", "extra"].flatMap((d) =>
     readdirSync(join(root, "test", d)).filter((f) => f.endsWith(".test.ts")).map((f) => join(root, "test", d, f)));
 
 await build({
