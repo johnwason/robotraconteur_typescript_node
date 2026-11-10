@@ -346,16 +346,21 @@ async function candidateHosts(url_host: string): Promise<string[]>
     const host = url_host.replace(/^\[|\]$/g, "");
     if (isIP(host.replace(/%.*$/, "")) === 0)
     {
+        // localhost is always loopback (RFC 6761). Windows resolves it only to ::1, but a server may
+        // listen on 127.0.0.1 alone, or on a different port for each, as Core does when given port 0
+        const loopback = host.toLowerCase() === "localhost" ? ["127.0.0.1", "::1"] : [];
+        let addresses: string[];
         try
         {
-            const addresses = await lookup(host, { all: true });
-            if (addresses.length > 0) return [...new Set(addresses.map((a) => a.address))];
+            addresses = (await lookup(host, { all: true })).map((a) => a.address);
         }
         catch (e)
         {
+            if (loopback.length > 0) return loopback;
             throw connectionError(`Could not resolve host ${host}: ${(e as Error).message}`);
         }
-        return [host];
+        const all = [...new Set([...addresses, ...loopback])];
+        return all.length > 0 ? all : [host];
     }
     if (!isIPv6(host) || !isIPv6LinkLocal(host) || host.includes("%")) return [host];
 
