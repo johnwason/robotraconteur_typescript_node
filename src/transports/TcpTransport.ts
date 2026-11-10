@@ -25,7 +25,6 @@ import type { SocketAdapter, SocketEvents, StreamTransportParent, TlsStarter } f
 import { CertificateError, verifyNodeCertificate } from "./NodeCertificate.js";
 import { userConfigDir } from "./NodeDirectories.js";
 import { ROOT_CA_2015, ROOT_CA_2020 } from "./RootCertificates.js";
-import type { WebSocket as WsWebSocket } from "ws";
 import { interfaceScope, isIPv6LinkLocal } from "./NetworkUtil.js";
 import { IPNodeDiscovery, IPNodeDiscoveryFlags } from "./IPNodeDiscovery.js";
 import type { NodeAnnouncement } from "./IPNodeDiscovery.js";
@@ -83,10 +82,19 @@ export interface WebSocketClientOptions
     headers?: Record<string, string>;
 }
 
+/** The parts of a WebSocket from the ws package that are used, so that its types are not needed by users */
+interface WsLike
+{
+    readonly readyState: number;
+    readonly bufferedAmount: number;
+    send(data: Uint8Array, options: { binary: boolean }, cb: (err?: Error) => void): void;
+    terminate(): void;
+}
+
 /** A WebSocket from the ws package. Each send reports when its data has been written to the socket */
 export class WebSocketAdapter implements SocketAdapter
 {
-    constructor(private ws: Pick<WsWebSocket, "readyState" | "bufferedAmount" | "send" | "terminate">) {}
+    constructor(private ws: WsLike) {}
 
     write(frame: Uint8Array): Promise<void> | void
     {
