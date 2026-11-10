@@ -1,8 +1,10 @@
+<p align="center"><img src="docs/figures/logo-header.svg"></p>
+
 # robotraconteur-node
 
 Node.js additions for the [robotraconteur](https://github.com/johnwason/robotraconteur_typescript) TypeScript client: the `rr+tcp` transport and discovery of nodes and services on the network. Browsers cannot use TCP sockets or UDP, so these live in a separate package and the browser library stays small.
 
-**Status:** early development. The client side of TCP, discovery, and subscriptions by service type are implemented. Services and servers, TLS (`rrs+tcp`), and the Local transport are not.
+**Status:** early development. The client side of TCP, TLS (`rrs+tcp`), WebSockets, discovery, and subscriptions by service type are implemented. Services and servers, and the Local transport, are not.
 
 Requires Node.js 22 or newer.
 
