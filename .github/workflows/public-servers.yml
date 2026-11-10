@@ -1,0 +1,45 @@
+# Tests against public servers, using npm run test:extra. They depend on servers outside this
+# repository, so they run weekly and on request instead of on every push.
+name: Public servers
+
+on:
+  schedule:
+  - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 22.12.0
+  # The branch of the shared package to build and test against
+  RR_SHARED_REF: dev
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: robotraconteur_typescript_node
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        path: robotraconteur_typescript_node
+    - name: Checkout the shared package
+      uses: actions/checkout@v4
+      with:
+        repository: johnwason/robotraconteur_typescript
+        ref: ${{ env.RR_SHARED_REF }}
+        path: robotraconteur_typescript
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+    - name: Build the shared package
+      working-directory: robotraconteur_typescript
+      run: npm ci --ignore-scripts && npm run build
+    - name: Install Node.js dependencies
+      run: npm ci
+    - name: Test against public servers
+      run: npm run test:extra
