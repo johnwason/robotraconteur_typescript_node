@@ -319,11 +319,11 @@ function openSocket(host: string, port: number, timeout: number): Promise<Socket
             socket.destroy();
             reject(connectionError("Timed out connecting to TCP endpoint"));
         }, timeout);
-        const on_error = () =>
+        const on_error = (err: Error) =>
         {
             clearTimeout(timer);
             socket.destroy();
-            reject(connectionError("Could not connect to TCP endpoint"));
+            reject(connectionError(`Could not connect to TCP endpoint ${host}:${port}: ${err.message}`));
         };
         socket.once("error", on_error);
         socket.once("connect", () =>
@@ -370,9 +370,10 @@ async function connectAny(hosts: string[], port: number, timeout: number): Promi
     {
         return await Promise.any(attempts);
     }
-    catch
+    catch (e)
     {
-        throw connectionError("Could not connect to TCP endpoint");
+        const reasons = (e as AggregateError).errors.map((r) => (r as Error).message);
+        throw reasons.length === 1 ? (e as AggregateError).errors[0] : connectionError(reasons.join("; "));
     }
 }
 
