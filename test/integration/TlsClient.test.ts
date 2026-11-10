@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { ChildProcess, spawn } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -21,70 +20,30 @@ import { NodeID, RobotRaconteurNode } from "robotraconteur";
 import type { RobotRaconteurError } from "robotraconteur";
 import { TcpTransport } from "../../src/index.js";
 import type { TlsClientOptions } from "../../src/index.js";
-import { TestCertificates } from "../common/TestCertificates.js";
-import { root } from "./TestServer.js";
+import { TlsTestServers } from "./TlsServer.js";
+import type { TlsTestServer } from "./TlsServer.js";
 
-// rrs+tcp against Core TLS servers, using a certificate authority made for the test. Core is told to
-// trust it for client certificates with ROBOTRACONTEUR_SSL_CERT_FILE.
+// rrs+tcp against Core TLS servers, using a certificate authority made for the test
 
-const certs = new TestCertificates();
-const ca = certs.root();
-const intermediate = certs.intermediate(ca);
-const servers: ChildProcess[] = [];
+const tls = new TlsTestServers();
+const { certs, ca, intermediate } = tls;
 
-interface Server
-{
-    id: NodeID;
-    port: number;
-}
-
-/** Start a Core TLS server as the given node, presenting a certificate for certificate_id, or for itself if that is Any */
-async function startServer(name: string, id: NodeID, certificate_id: NodeID, trust_ca: boolean): Promise<Server>
-{
-    const config = join(certs.dir, name);
-    const cert = certs.node(intermediate, (certificate_id.isAnyNode ? id : certificate_id).toString(), name);
-    certs.pkcs12(cert, [intermediate], join(config, "certificates", id.toString() + ".p12"));
-    const args = ["-u", join(root, "test/server/rr_tls_test_server.py"), id.toString(), config, ...(trust_ca ? ["--ca", ca.certFile] : [])];
-    const p = spawn("python3", args, { stdio: ["pipe", "pipe", "inherit"] });
-    servers.push(p);
-    const port = await new Promise<number>((resolve, reject) =>
-    {
-        let out = "";
-        p.stdout!.on("data", (d: Buffer) =>
-        {
-            out += d.toString();
-            const m = /PORT (\d+)\n/.exec(out);
-            if (m) resolve(Number(m[1]));
-        });
-        p.on("exit", () => reject(new Error("TLS test server exited")));
-    });
-    return { id, port };
-}
-
-let server: Server;
-let impostor: Server;
-let no_client_ca: Server;
+let server: TlsTestServer;
+let impostor: TlsTestServer;
+let no_client_ca: TlsTestServer;
 
 before(async () =>
 {
-    server = await startServer("server", NodeID.newUniqueID(), NodeID.Any, true);
-    impostor = await startServer("impostor", NodeID.newUniqueID(), NodeID.newUniqueID(), true);
-    no_client_ca = await startServer("no_client_ca", NodeID.newUniqueID(), NodeID.Any, false);
+    server = await tls.start("server");
+    impostor = await tls.start("impostor", NodeID.newUniqueID(), NodeID.newUniqueID());
+    no_client_ca = await tls.start("no_client_ca", NodeID.newUniqueID(), NodeID.Any, false);
 }, { timeout: 60000 });
 
-after(() =>
-{
-    for (const p of servers)
-    {
-        p.removeAllListeners("exit");
-        p.kill();
-    }
-    certs.close();
-});
+after(() => tls.close());
 
 const trust_test_ca: TlsClientOptions = { trustedRoots: [ca.pem], useDefaultRoots: false };
-const id_of = (s: Server) => s.id.toString().slice(1, -1);
-const url = (s: Server, query = `nodeid=${id_of(s)}&`) => `rrs+tcp://localhost:${s.port}?${query}service=test_service`;
+const id_of = (s: TlsTestServer) => s.id.toString().slice(1, -1);
+const url = (s: TlsTestServer, query = `nodeid=${id_of(s)}&`) => `rrs+tcp://localhost:${s.port}?${query}service=test_service`;
 
 async function withNode<T>(options: TlsClientOptions, fn: (node: RobotRaconteurNode, tcp: TcpTransport) => Promise<T>, node_id?: NodeID): Promise<T>
 {

@@ -22,6 +22,7 @@ import { RobotRaconteurNode } from "robotraconteur";
 import { createServiceSubscriptionFilterAttributeRegex, NodeDiscovery, ServiceSubscriptionManager, ServiceSubscriptionFilterAttribute, ServiceSubscriptionFilterAttributeGroup, TcpTransport } from "../../src/index.js";
 import type { NodeDiscoveryInfo } from "../../src/index.js";
 import { root, startTestServer, TestServer } from "./TestServer.js";
+import { TLS_TEST_TYPE, TlsTestServers } from "./TlsServer.js";
 
 // Core announces over IPv6 link-local multicast by default
 const has_link_local = Object.values(networkInterfaces()).flat().some((a) => a?.family === "IPv6" && a.address.startsWith("fe80"));
@@ -361,6 +362,51 @@ describe("node discovery", { skip: has_link_local ? false : "no IPv6 link-local 
         finally
         {
             m.close();
+        }
+    });
+
+    test("a subscription by type uses TLS for a node that requires it", { timeout: 90000 }, async () =>
+    {
+        const tls = new TlsTestServers();
+        const s = await tls.start("discovered");
+        const saved = tcp.tlsOptions;
+        tcp.tlsOptions = { trustedRoots: [tls.ca.pem] };
+        try
+        {
+            // Discovery reads the services of the node over rrs+tcp, since it refuses rr+tcp
+            const found = await discovery.findServiceByType(TLS_TEST_TYPE);
+            const info = found.find((x) => x.nodeID.equals(s.id));
+            assert.ok(info, "the TLS server was not found");
+            assert.ok(info.connectionURLs.some((u) => u.startsWith("rrs+tcp://")), info.connectionURLs.join(", "));
+
+            const sub = discovery.subscribeServiceByType(TLS_TEST_TYPE, { nodes: [{ nodeID: s.id }] });
+            try
+            {
+                const c = await sub.getDefaultClientWait(30000);
+                assert.equal(await c.callFunction("add_two_numbers", [2, 4]), 6);
+                assert.ok(tcp.isTransportConnectionSecure(c));
+                assert.equal(tcp.getSecurePeerIdentity(c), s.id.toString());
+            }
+            finally
+            {
+                sub.close();
+            }
+
+            // A filter on the scheme selects TLS whether or not the node requires it
+            const only_tls = discovery.subscribeServiceByType(TLS_TEST_TYPE, { nodes: [{ nodeID: s.id }], transportSchemes: ["rrs+tcp"] });
+            try
+            {
+                assert.ok(tcp.isTransportConnectionSecure(await only_tls.getDefaultClientWait(30000)));
+            }
+            finally
+            {
+                only_tls.close();
+            }
+        }
+        finally
+        {
+            tcp.tlsOptions = saved;
+            tls.close();
         }
     });
 

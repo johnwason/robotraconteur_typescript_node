@@ -55,7 +55,10 @@ export interface NodeDiscoveryOptions
 {
     /** Values of IPNodeDiscoveryFlags. Defaults to IPv6 link-local multicast, as in Core */
     flags?: number;
-    /** Transport schemes used when searching for services */
+    /**
+     * Transport schemes used when searching for services. Defaults to rr+tcp and rrs+tcp. When a
+     * node offers both, rrs+tcp is tried first, as in Core.
+     */
     schemes?: string[];
     /** How long to wait for nodes to respond to a discovery request, in milliseconds */
     discoveryWait?: number;
@@ -162,7 +165,7 @@ export class NodeDiscovery
     constructor(readonly node: RobotRaconteurNode, private transport: TcpTransport, options: NodeDiscoveryOptions = {})
     {
         this.flags = options.flags ?? IPNodeDiscoveryFlags.LinkLocal;
-        this.schemes = options.schemes ?? ["rr+tcp"];
+        this.schemes = options.schemes ?? ["rr+tcp", "rrs+tcp"];
         this.discovery_wait = options.discoveryWait ?? 1500;
         this.service_timeout = options.serviceTimeout ?? 5000;
         this.node_expiration = options.nodeExpiration ?? 60000;
