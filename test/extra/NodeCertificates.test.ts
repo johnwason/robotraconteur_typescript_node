@@ -49,7 +49,7 @@ describe("rrs+tcp with real node certificates", { skip: ids.length >= 2 ? false 
             server.stdout!.on("data", (d: Buffer) =>
             {
                 out += d.toString();
-                const m = /PORT (\d+)\n/.exec(out);
+                const m = /PORT (\d+)\r?\n/.exec(out);
                 if (m) resolve_port(Number(m[1]));
             });
             server.on("exit", () => reject(new Error("TLS test server exited")));

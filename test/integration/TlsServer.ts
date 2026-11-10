@@ -60,7 +60,7 @@ export class TlsTestServers
             p.stdout!.on("data", (d: Buffer) =>
             {
                 out += d.toString();
-                const m = /PORT (\d+)\n/.exec(out);
+                const m = /PORT (\d+)\r?\n/.exec(out);
                 if (m) resolve(Number(m[1]));
             });
             p.on("exit", () => reject(new Error("TLS test server exited")));

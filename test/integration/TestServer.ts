@@ -45,14 +45,28 @@ export async function startTestServer(): Promise<TestServer>
     });
     const port = await new Promise<number>((res, rej) =>
     {
+        // Stop the server if it never reports its port, so it cannot keep the test run alive
+        const timer = setTimeout(() =>
+        {
+            p.kill();
+            rej(new Error("Test server did not report its port"));
+        }, 30000);
         let output = "";
         p.stdout!.on("data", (d: Buffer) =>
         {
             output += d.toString();
-            const m = /PORT (\d+)\n/.exec(output);
-            if (m) res(Number(m[1]));
+            const m = /PORT (\d+)\r?\n/.exec(output);
+            if (m)
+            {
+                clearTimeout(timer);
+                res(Number(m[1]));
+            }
         });
-        p.on("exit", () => rej(new Error("Test server exited")));
+        p.on("exit", () =>
+        {
+            clearTimeout(timer);
+            rej(new Error("Test server exited"));
+        });
     });
     return {
         process: p,
