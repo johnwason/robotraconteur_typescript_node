@@ -13,8 +13,9 @@
 // limitations under the License.
 
 import { X509Certificate } from "node:crypto";
+import { lookup } from "node:dns/promises";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { connect, isIPv6, Socket } from "node:net";
+import { connect, isIP, isIPv6, Socket } from "node:net";
 import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { connect as tlsConnect, TLSSocket } from "node:tls";
@@ -336,9 +337,26 @@ function openSocket(host: string, port: number, timeout: number): Promise<Socket
 }
 
 /** A link-local address without a scope may be reachable through any interface, so all are tried */
-function candidateHosts(url_host: string): string[]
+/**
+ * The addresses to try for a host. Like Core, a name is resolved and every address is tried, since
+ * a server may listen on only one of the addresses a name resolves to, such as 127.0.0.1 for localhost.
+ */
+async function candidateHosts(url_host: string): Promise<string[]>
 {
     const host = url_host.replace(/^\[|\]$/g, "");
+    if (isIP(host.replace(/%.*$/, "")) === 0)
+    {
+        try
+        {
+            const addresses = await lookup(host, { all: true });
+            if (addresses.length > 0) return [...new Set(addresses.map((a) => a.address))];
+        }
+        catch (e)
+        {
+            throw connectionError(`Could not resolve host ${host}: ${(e as Error).message}`);
+        }
+        return [host];
+    }
     if (!isIPv6(host) || !isIPv6LinkLocal(host) || host.includes("%")) return [host];
 
     const scopes = new Set<string>();
@@ -425,7 +443,7 @@ export class TcpTransport implements Transport, StreamTransportParent
                 const ws_url = url.replace(u.scheme + "://", (u.scheme === "rr+wss" ? "wss" : "ws") + "://");
                 return openWebSocket(ws_url, this.defaultConnectTimeout, this.webSocketOptions, events);
             }
-            const socket = await connectAny(candidateHosts(u.host), u.port, this.defaultConnectTimeout);
+            const socket = await connectAny(await candidateHosts(u.host), u.port, this.defaultConnectTimeout);
             const listeners = { data: (data: Buffer) => events.onData(data), close: () => events.onClose() };
             socket.on("data", listeners.data);
             socket.on("error", () => undefined); // Always followed by close
