@@ -19,7 +19,7 @@ import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { RobotRaconteurNode } from "robotraconteur";
-import { createServiceSubscriptionFilterAttributeRegex, NodeDiscovery, ServiceSubscriptionFilterAttribute, ServiceSubscriptionFilterAttributeGroup, TcpTransport } from "../../src/index.js";
+import { createServiceSubscriptionFilterAttributeRegex, NodeDiscovery, ServiceSubscriptionManager, ServiceSubscriptionFilterAttribute, ServiceSubscriptionFilterAttributeGroup, TcpTransport } from "../../src/index.js";
 import type { NodeDiscoveryInfo } from "../../src/index.js";
 import { root, startTestServer, TestServer } from "./TestServer.js";
 
@@ -208,6 +208,160 @@ describe("node discovery", { skip: has_link_local ? false : "no IPv6 link-local 
     {
         const n = new NodeDiscovery(node, tcp);
         assert.throws(() => n.subscribeServiceByType(TYPE));
+    });
+
+    const byType = () => ({ name: "sub1", serviceTypes: [TYPE], filter: { serviceNames: [SERVICE], nodes: [{ nodeName: remote.name }] } });
+    const byUrl = () => ({ name: "sub1", urls: [`rr+tcp://localhost:${server.port}?service=${SERVICE}`] });
+    const disconnected = (s: { tryGetDefaultClient(): unknown }) => until(() => s.tryGetDefaultClient() === null, "disconnection");
+
+    for (const [label, details] of [["by type", byType], ["by URL", byUrl]] as const)
+    {
+        test(`the subscription manager manages a subscription ${label}`, { timeout: 60000 }, async () =>
+        {
+            const m = new ServiceSubscriptionManager(discovery);
+            try
+            {
+                m.addSubscription(details());
+                const s = m.getSubscription("sub1");
+                assert.equal((await s.getDefaultClientWait(20000)).objectType, TYPE);
+                assert.ok(m.isConnected("sub1"));
+                assert.ok(m.isEnabled("sub1"));
+                assert.deepEqual(m.getSubscriptionNames(), ["sub1"]);
+
+                const w = s.subscribeWire("w1");
+                await until(() => w.activeConnectionCount === 1, "wire connection");
+
+                m.disableSubscription("sub1");
+                await disconnected(s);
+                assert.ok(!m.isEnabled("sub1"));
+                assert.ok(!m.isConnected("sub1"));
+
+                // Enabling keeps the same subscription, along with its wire
+                m.enableSubscription("sub1");
+                await s.getDefaultClientWait(20000);
+                assert.equal(m.getSubscription("sub1"), s);
+                await until(() => w.activeConnectionCount === 1, "wire to resume");
+
+                assert.throws(() => m.addSubscription(details()), /already exists/);
+
+                m.removeSubscription("sub1");
+                await disconnected(s);
+                assert.throws(() => m.getSubscription("sub1"), /not found/);
+                assert.throws(() => m.isConnected("sub1"), /not found/);
+                assert.ok(!m.isEnabled("sub1"));
+
+                m.addSubscription(details());
+                await m.getSubscription("sub1").getDefaultClientWait(20000);
+            }
+            finally
+            {
+                m.close();
+            }
+            assert.deepEqual(m.getSubscriptionNames(), []);
+        });
+    }
+
+    test("the subscription manager changes a subscription in place", { timeout: 60000 }, async () =>
+    {
+        const m = new ServiceSubscriptionManager(discovery);
+        try
+        {
+            m.addSubscription(byType());
+            const s = m.getSubscription("sub1");
+            const first = await s.getDefaultClientWait(20000);
+
+            // A filter that still matches leaves the connection alone
+            m.updateSubscription(byType());
+            assert.equal(s.tryGetDefaultClient(), first);
+
+            // A filter that no longer matches disconnects the client
+            m.updateSubscription({ ...byType(), filter: { serviceNames: ["no_such_service"] } });
+            await disconnected(s);
+            assert.equal(s.getClientIDs().length, 0);
+
+            m.updateSubscription(byType());
+            await s.getDefaultClientWait(20000);
+
+            // Changing the connection method keeps the same subscription
+            m.updateSubscription(byUrl());
+            assert.equal(m.getSubscription("sub1"), s);
+            assert.equal((await s.getDefaultClientWait(20000)).objectType, TYPE);
+            assert.deepEqual(s.getServiceURL(), byUrl().urls);
+
+            // Disabling without closing leaves the client connected
+            const current = await s.getDefaultClientWait(20000);
+            m.disableSubscription("sub1", false);
+            assert.ok(!m.isEnabled("sub1"));
+            assert.equal(s.tryGetDefaultClient(), current);
+            m.enableSubscription("sub1");
+            assert.equal(s.tryGetDefaultClient(), current);
+        }
+        finally
+        {
+            m.close();
+        }
+    });
+
+    test("the subscription manager can start with nothing connected", { timeout: 60000 }, async () =>
+    {
+        const m = new ServiceSubscriptionManager(discovery);
+        try
+        {
+            m.init([{ ...byUrl(), name: "disabled", enabled: false }, { name: "empty" }]);
+            assert.deepEqual(m.getSubscriptionNames(), ["disabled", "empty"]);
+            assert.deepEqual(m.getSubscriptionDetails().map((d) => d.enabled), [false, false]);
+            assert.equal(m.getSubscription("disabled").getClientIDs().length, 0);
+
+            // A subscription with nowhere to connect stays disabled
+            m.enableSubscription("empty");
+            assert.ok(!m.isEnabled("empty"));
+
+            // Created on request, then configured later. Its wire waits for a client
+            assert.throws(() => m.getSubscription("later"), /not found/);
+            const s = m.getSubscription("later", true);
+            assert.ok(!m.isEnabled("later"));
+            m.updateSubscription({ ...byUrl(), name: "later" });
+            assert.ok(m.isEnabled("later"));
+            assert.equal(m.getSubscription("later"), s);
+            await s.getDefaultClientWait(20000);
+
+            m.enableSubscription("disabled");
+            await m.getSubscription("disabled").getDefaultClientWait(20000);
+
+            // Unknown names are ignored, as in Core
+            m.enableSubscription("nothing");
+            m.disableSubscription("nothing");
+            m.removeSubscription("nothing");
+        }
+        finally
+        {
+            m.close();
+        }
+    });
+
+    test("the subscription manager rejects invalid details", () =>
+    {
+        const m = new ServiceSubscriptionManager(discovery);
+        assert.throws(() => m.addSubscription({ name: "" }), /name must be specified/);
+        assert.throws(() => m.addSubscription({ name: "a", connectionMethod: "type" }), /Service types must be specified/);
+        assert.throws(() => m.updateSubscription({ name: "a", urls: ["rr+tcp://localhost:1?service=s"] }), /not found/);
+        assert.deepEqual(m.getSubscriptionNames(), []);
+    });
+
+    test("the subscription manager needs discovery only for subscriptions by type", { timeout: 40000 }, async () =>
+    {
+        const m = new ServiceSubscriptionManager(new NodeDiscovery(node, tcp));
+        try
+        {
+            assert.throws(() => m.addSubscription(byType()));
+            assert.deepEqual(m.getSubscriptionNames(), []);
+            m.addSubscription(byUrl());
+            await m.getSubscription("sub1").getDefaultClientWait(20000);
+        }
+        finally
+        {
+            m.close();
+        }
     });
 
     test("service information subscriptions report detected and lost services", { timeout: 40000 }, async () =>

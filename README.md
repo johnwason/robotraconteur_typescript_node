@@ -95,6 +95,21 @@ await reynard.callFunction("say", ["Hello!"]);
 subscription.close();
 ```
 
+A `ServiceSubscriptionManager` keeps a set of named subscriptions, for applications that connect to several services or read them from a configuration. Each one connects by URL, or by service type and filter. A name keeps the same subscription when it is disabled, enabled, or changed, so wires and pipes on it keep working.
+
+```js
+const manager = new ServiceSubscriptionManager(discovery);
+manager.addSubscription({ name: "reynard", serviceTypes: ["experimental.reynard_the_robot.Reynard"] });
+manager.addSubscription({ name: "arm", urls: ["rr+tcp://localhost:52701?service=robot"], enabled: false });
+
+const reynard = await manager.getSubscription("reynard").getDefaultClientWait(5000);
+manager.enableSubscription("arm");
+manager.disableSubscription("reynard");
+manager.updateSubscription({ name: "arm", urls: ["rr+tcp://localhost:52702?service=robot"] });
+
+manager.close();
+```
+
 The wire, pipe, and client functions are described in the [robotraconteur README](https://github.com/johnwason/robotraconteur_typescript/tree/node-split#staying-connected). A subscription keeps the program running until it is closed or `node.shutdown()` is called.
 
 The filter passed as the second argument has these optional fields:

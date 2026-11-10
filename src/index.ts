@@ -25,5 +25,7 @@ export {
 } from "./discovery/AttributeFilter.js";
 export type { ServiceSubscriptionFilterAttributeGroupOperation } from "./discovery/AttributeFilter.js";
 export { ServiceInfo2Subscription } from "./discovery/Subscriptions.js";
+export { ServiceSubscriptionManager } from "./discovery/SubscriptionManager.js";
+export type { ServiceSubscriptionManagerConnectionMethod, ServiceSubscriptionManagerDetails } from "./discovery/SubscriptionManager.js";
 export type { ServiceInfo2Handler, ServiceSubscriptionFilter, ServiceSubscriptionFilterNode } from "./discovery/Subscriptions.js";
 export type { NodeDetectedHandler, NodeDiscoveryInfo, NodeDiscoveryOptions, NodeInfo2, NodeLostHandler, ServiceInfo2 } from "./discovery/NodeDiscovery.js";

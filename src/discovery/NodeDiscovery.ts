@@ -135,6 +135,15 @@ function sleepInBackground(ms: number): Promise<void>
 }
 
 /** Finds nodes and services on the network. Node.js only, as browsers cannot use UDP */
+/** Connects a subscription to the services found by discovery */
+export interface ServiceTypeSource
+{
+    start(serviceTypes: string[], filter?: ServiceSubscriptionFilter): void;
+    /** Change the types and filter. Clients that no longer qualify are disconnected */
+    update(serviceTypes: string[], filter?: ServiceSubscriptionFilter): void;
+    stop(): void;
+}
+
 export class NodeDiscovery
 {
     private nodes = new Map<string, NodeStorage>();
@@ -150,7 +159,7 @@ export class NodeDiscovery
     private readonly service_timeout: number;
     private readonly node_expiration: number;
 
-    constructor(private node: RobotRaconteurNode, private transport: TcpTransport, options: NodeDiscoveryOptions = {})
+    constructor(readonly node: RobotRaconteurNode, private transport: TcpTransport, options: NodeDiscoveryOptions = {})
     {
         this.flags = options.flags ?? IPNodeDiscoveryFlags.LinkLocal;
         this.schemes = options.schemes ?? ["rr+tcp"];
@@ -362,8 +371,19 @@ export class NodeDiscovery
      */
     subscribeServiceByType(serviceTypes: string | string[], filter?: ServiceSubscriptionFilter): ServiceSubscription
     {
-        const types = typeof serviceTypes === "string" ? [serviceTypes] : serviceTypes;
         const subscription = new ServiceSubscription(this.node, { connectRetryDelay: 15000, connectErrorLimit: 25 });
+        this.serviceTypeSource(subscription).start(typeof serviceTypes === "string" ? [serviceTypes] : serviceTypes, filter);
+        return subscription;
+    }
+
+    /**
+     * Supply an existing subscription with the services found by discovery. Used by
+     * subscribeServiceByType and ServiceSubscriptionManager.
+     */
+    serviceTypeSource(subscription: ServiceSubscription): ServiceTypeSource
+    {
+        let types: string[] = [];
+        let filter: ServiceSubscriptionFilter | undefined;
         const subscriber: DiscoverySubscriber = {
             nodeUpdated: (storage) =>
             {
@@ -385,8 +405,27 @@ export class NodeDiscovery
             close: () => subscription.close()
         };
         subscription.addCloseListener(() => this.removeSubscriber(subscriber));
-        this.addSubscriber(subscriber);
-        return subscription;
+        return {
+            start: (t, f) =>
+            {
+                types = t;
+                filter = f;
+                this.addSubscriber(subscriber);
+            },
+            update: (t, f) =>
+            {
+                types = t;
+                filter = f;
+                for (const id of subscription.getClientIDs())
+                {
+                    const storage = this.nodes.get(id.nodeID.toString());
+                    const service = storage?.services?.find((s) => s.name === id.serviceName);
+                    if (!storage || !service || !filterService(types, filter, storage, service)) subscription.removeClient(id);
+                }
+                for (const storage of this.nodes.values()) subscriber.nodeUpdated(storage);
+            },
+            stop: () => this.removeSubscriber(subscriber)
+        };
     }
 
     /** Track which services of the given types exist on the network, without connecting to them */
