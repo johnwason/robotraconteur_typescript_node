@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { NodeID } from "robotraconteur";
 import { TestCertificates } from "../common/TestCertificates.js";
 import type { TestCertificate } from "../common/TestCertificates.js";
-import { root } from "./TestServer.js";
+import { PYTHON, root } from "./TestServer.js";
 
 export const TLS_TEST_TYPE = "experimental.tls_test.testobj";
 
@@ -52,7 +52,7 @@ export class TlsTestServers
         const cert = this.certs.node(this.intermediate, (certificate_id.isAnyNode ? id : certificate_id).toString(), name);
         this.certs.pkcs12(cert, [this.intermediate], join(config, "certificates", id.toString() + ".p12"));
         const args = ["-u", join(root, "test/server/rr_tls_test_server.py"), id.toString(), config, ...(trust_ca ? ["--ca", this.ca.certFile] : [])];
-        const p = spawn("python3", args, { stdio: ["pipe", "pipe", "inherit"] });
+        const p = spawn(PYTHON, args, { stdio: ["pipe", "pipe", "inherit"] });
         this.processes.push(p);
         const port = await new Promise<number>((resolve, reject) =>
         {
@@ -60,7 +60,7 @@ export class TlsTestServers
             p.stdout!.on("data", (d: Buffer) =>
             {
                 out += d.toString();
-                const m = /PORT (\d+)\n/.exec(out);
+                const m = /PORT (\d+)\r?\n/.exec(out);
                 if (m) resolve(Number(m[1]));
             });
             p.on("exit", () => reject(new Error("TLS test server exited")));
@@ -68,13 +68,25 @@ export class TlsTestServers
         return { id, port };
     }
 
-    close(): void
+    /** Stop the servers. Closing their input lets them remove anything they added to a certificate store */
+    async close(): Promise<void>
     {
-        for (const p of this.processes)
+        await Promise.all(this.processes.map((p) => new Promise<void>((resolve) =>
         {
             p.removeAllListeners("exit");
-            p.kill();
-        }
+            if (p.exitCode !== null)
+            {
+                resolve();
+                return;
+            }
+            const timer = setTimeout(() => p.kill(), 5000);
+            p.once("exit", () =>
+            {
+                clearTimeout(timer);
+                resolve();
+            });
+            p.stdin!.end();
+        })));
         this.certs.close();
     }
 }

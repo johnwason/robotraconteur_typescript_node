@@ -25,7 +25,7 @@ import { after, before, describe, test } from "node:test";
 import { NodeID, RobotRaconteurNode } from "robotraconteur";
 import { TcpTransport } from "../../src/index.js";
 import type { TlsClientOptions } from "../../src/index.js";
-import { root } from "../integration/TestServer.js";
+import { PYTHON, root } from "../integration/TestServer.js";
 
 const folder = process.env.RR_NODE_CERTIFICATES;
 const ids = folder ? readdirSync(folder).filter((f) => /^\{[0-9a-f-]{36}\}\.p12$/.test(f)).map((f) => f.slice(0, -4)) : [];
@@ -42,14 +42,14 @@ describe("rrs+tcp with real node certificates", { skip: ids.length >= 2 ? false 
         // The server looks for its certificate in <config>/certificates
         config = mkdtempSync(join(tmpdir(), "rr_real_certs_"));
         symlinkSync(resolve(folder!), join(config, "certificates"));
-        server = spawn("python3", ["-u", join(root, "test/server/rr_tls_test_server.py"), server_id!, config], { stdio: ["pipe", "pipe", "inherit"] });
+        server = spawn(PYTHON, ["-u", join(root, "test/server/rr_tls_test_server.py"), server_id!, config], { stdio: ["pipe", "pipe", "inherit"] });
         port = await new Promise<number>((resolve_port, reject) =>
         {
             let out = "";
             server.stdout!.on("data", (d: Buffer) =>
             {
                 out += d.toString();
-                const m = /PORT (\d+)\n/.exec(out);
+                const m = /PORT (\d+)\r?\n/.exec(out);
                 if (m) resolve_port(Number(m[1]));
             });
             server.on("exit", () => reject(new Error("TLS test server exited")));

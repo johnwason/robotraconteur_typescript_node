@@ -13,8 +13,12 @@
 // limitations under the License.
 
 import { X509Certificate } from "node:crypto";
+import { lookup as dnsLookup } from "node:dns";
+import type { LookupAddress, LookupOptions } from "node:dns";
+import { lookup } from "node:dns/promises";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { connect, isIPv6, Socket } from "node:net";
+import { connect, isIP, isIPv6, Socket } from "node:net";
+import type { LookupFunction } from "node:net";
 import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { connect as tlsConnect, TLSSocket } from "node:tls";
@@ -25,7 +29,6 @@ import type { SocketAdapter, SocketEvents, StreamTransportParent, TlsStarter } f
 import { CertificateError, verifyNodeCertificate } from "./NodeCertificate.js";
 import { userConfigDir } from "./NodeDirectories.js";
 import { ROOT_CA_2015, ROOT_CA_2020 } from "./RootCertificates.js";
-import type { WebSocket as WsWebSocket } from "ws";
 import { interfaceScope, isIPv6LinkLocal } from "./NetworkUtil.js";
 import { IPNodeDiscovery, IPNodeDiscoveryFlags } from "./IPNodeDiscovery.js";
 import type { NodeAnnouncement } from "./IPNodeDiscovery.js";
@@ -83,10 +86,19 @@ export interface WebSocketClientOptions
     headers?: Record<string, string>;
 }
 
+/** The parts of a WebSocket from the ws package that are used, so that its types are not needed by users */
+interface WsLike
+{
+    readonly readyState: number;
+    readonly bufferedAmount: number;
+    send(data: Uint8Array, options: { binary: boolean }, cb: (err?: Error) => void): void;
+    terminate(): void;
+}
+
 /** A WebSocket from the ws package. Each send reports when its data has been written to the socket */
 export class WebSocketAdapter implements SocketAdapter
 {
-    constructor(private ws: Pick<WsWebSocket, "readyState" | "bufferedAmount" | "send" | "terminate">) {}
+    constructor(private ws: WsLike) {}
 
     write(frame: Uint8Array): Promise<void> | void
     {
@@ -110,17 +122,32 @@ export class WebSocketAdapter implements SocketAdapter
     }
 }
 
+const LOOPBACK: LookupAddress[] = [{ address: "127.0.0.1", family: 4 }, { address: "::1", family: 6 }];
+
+/** Host lookup for WebSockets that, like candidateHosts, gives both loopback addresses for localhost */
+const webSocketLookup = ((hostname: string, options: LookupOptions, callback: (err: Error | null, address: string | LookupAddress[], family?: number) => void) =>
+{
+    if (hostname.toLowerCase() !== "localhost")
+    {
+        dnsLookup(hostname, options, callback as never);
+        return;
+    }
+    const addresses = LOOPBACK.filter((a) => !options.family || a.family === options.family);
+    if (options.all) callback(null, addresses);
+    else callback(null, addresses[0]!.address, addresses[0]!.family);
+}) as LookupFunction;
+
 async function openWebSocket(url: string, timeout: number, options: WebSocketClientOptions, events: SocketEvents): Promise<SocketAdapter>
 {
     // Loaded only when needed, so that rr+tcp works without it
     const { WebSocket } = await import("ws");
-    const ws = new WebSocket(url, WEBSOCKET_PROTOCOL, { ...options, handshakeTimeout: timeout, perMessageDeflate: false });
+    const ws = new WebSocket(url, WEBSOCKET_PROTOCOL, { lookup: webSocketLookup, ...options, handshakeTimeout: timeout, perMessageDeflate: false });
     await new Promise<void>((resolve, reject) =>
     {
-        const on_error = () =>
+        const on_error = (err: Error) =>
         {
             ws.terminate();
-            reject(connectionError("Could not connect to WebSocket endpoint"));
+            reject(connectionError(`Could not connect to WebSocket endpoint ${url}: ${err.message}`));
         };
         ws.once("error", on_error);
         ws.once("open", () =>
@@ -311,11 +338,11 @@ function openSocket(host: string, port: number, timeout: number): Promise<Socket
             socket.destroy();
             reject(connectionError("Timed out connecting to TCP endpoint"));
         }, timeout);
-        const on_error = () =>
+        const on_error = (err: Error) =>
         {
             clearTimeout(timer);
             socket.destroy();
-            reject(connectionError("Could not connect to TCP endpoint"));
+            reject(connectionError(`Could not connect to TCP endpoint ${host}:${port}: ${err.message}`));
         };
         socket.once("error", on_error);
         socket.once("connect", () =>
@@ -328,9 +355,31 @@ function openSocket(host: string, port: number, timeout: number): Promise<Socket
 }
 
 /** A link-local address without a scope may be reachable through any interface, so all are tried */
-function candidateHosts(url_host: string): string[]
+/**
+ * The addresses to try for a host. Like Core, a name is resolved and every address is tried, since
+ * a server may listen on only one of the addresses a name resolves to, such as 127.0.0.1 for localhost.
+ */
+async function candidateHosts(url_host: string): Promise<string[]>
 {
     const host = url_host.replace(/^\[|\]$/g, "");
+    if (isIP(host.replace(/%.*$/, "")) === 0)
+    {
+        // localhost is always loopback (RFC 6761). Windows resolves it only to ::1, but a server may
+        // listen on 127.0.0.1 alone, or on a different port for each, as Core does when given port 0
+        const loopback = host.toLowerCase() === "localhost" ? ["127.0.0.1", "::1"] : [];
+        let addresses: string[];
+        try
+        {
+            addresses = (await lookup(host, { all: true })).map((a) => a.address);
+        }
+        catch (e)
+        {
+            if (loopback.length > 0) return loopback;
+            throw connectionError(`Could not resolve host ${host}: ${(e as Error).message}`);
+        }
+        const all = [...new Set([...addresses, ...loopback])];
+        return all.length > 0 ? all : [host];
+    }
     if (!isIPv6(host) || !isIPv6LinkLocal(host) || host.includes("%")) return [host];
 
     const scopes = new Set<string>();
@@ -362,9 +411,10 @@ async function connectAny(hosts: string[], port: number, timeout: number): Promi
     {
         return await Promise.any(attempts);
     }
-    catch
+    catch (e)
     {
-        throw connectionError("Could not connect to TCP endpoint");
+        const reasons = (e as AggregateError).errors.map((r) => (r as Error).message);
+        throw reasons.length === 1 ? (e as AggregateError).errors[0] : connectionError(reasons.join("; "));
     }
 }
 
@@ -416,7 +466,7 @@ export class TcpTransport implements Transport, StreamTransportParent
                 const ws_url = url.replace(u.scheme + "://", (u.scheme === "rr+wss" ? "wss" : "ws") + "://");
                 return openWebSocket(ws_url, this.defaultConnectTimeout, this.webSocketOptions, events);
             }
-            const socket = await connectAny(candidateHosts(u.host), u.port, this.defaultConnectTimeout);
+            const socket = await connectAny(await candidateHosts(u.host), u.port, this.defaultConnectTimeout);
             const listeners = { data: (data: Buffer) => events.onData(data), close: () => events.onClose() };
             socket.on("data", listeners.data);
             socket.on("error", () => undefined); // Always followed by close

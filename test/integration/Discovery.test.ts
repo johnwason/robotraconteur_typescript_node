@@ -56,7 +56,7 @@ describe("node discovery", { skip: has_link_local ? false : "no IPv6 link-local 
     {
         discovery.close();
         await node.shutdown();
-        server.stop();
+        server?.stop();
     });
 
     test("finds a service by type and connects to it", { timeout: 30000 }, async () =>
@@ -406,7 +406,7 @@ describe("node discovery", { skip: has_link_local ? false : "no IPv6 link-local 
         finally
         {
             tcp.tlsOptions = saved;
-            tls.close();
+            await tls.close();
         }
     });
 

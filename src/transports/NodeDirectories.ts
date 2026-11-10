@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { posix, win32 } from "node:path";
 
 /**
  * The folder where Core keeps the configuration of the current user, as in NodeDirectories.cpp.
@@ -22,6 +22,8 @@ import { join } from "node:path";
  */
 export function userConfigDir(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, uid: number | undefined = process.getuid?.()): string
 {
+    // Paths use the separators of the platform asked about, not the one running
+    const join = platform === "win32" ? win32.join : posix.join;
     if (platform === "win32")
     {
         return env.ROBOTRACONTEUR_USER_CONFIG_DIR ?? join(env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "RobotRaconteur");

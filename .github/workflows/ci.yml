@@ -17,12 +17,20 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
       RR_CORE_TEST: ${{ github.workspace }}/rr-core/test
+      # On Windows, Core reads node certificates from the certificate store. Allow the TLS tests to
+      # add their test certificates there
+      RR_TEST_WINDOWS_CERT_STORE: ${{ startsWith(matrix.os, 'windows') && '1' || '' }}
     defaults:
       run:
+        shell: bash
         working-directory: robotraconteur_typescript_node
     steps:
     - uses: actions/checkout@v4
@@ -55,5 +63,7 @@ jobs:
       run: npm ci --ignore-scripts && npm run build
     - name: Install Node.js dependencies
       run: npm ci
+    - name: Tool versions
+      run: node --version && python --version && (openssl version || echo "openssl not found")
     - name: Test
       run: npm test

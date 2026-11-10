@@ -32,24 +32,41 @@ export interface TestServer
     stop(): void;
 }
 
+/** The Python interpreter. Windows usually has no python3 command */
+export const PYTHON = process.env.PYTHON ?? (process.platform === "win32" ? "python" : "python3");
+
 /** Start a Core test server. RR_TEST_SERVER_SCRIPT selects the C++ server instead of Python */
 export async function startTestServer(): Promise<TestServer>
 {
     const script = process.env.RR_TEST_SERVER_SCRIPT ?? "test/server/rr_test_server.py";
-    const p = spawn("python3", ["-u", join(shared, script)], {
+    const p = spawn(PYTHON, ["-u", join(shared, script)], {
         env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
         stdio: ["pipe", "pipe", "inherit"]
     });
     const port = await new Promise<number>((res, rej) =>
     {
+        // Stop the server if it never reports its port, so it cannot keep the test run alive
+        const timer = setTimeout(() =>
+        {
+            p.kill();
+            rej(new Error("Test server did not report its port"));
+        }, 30000);
         let output = "";
         p.stdout!.on("data", (d: Buffer) =>
         {
             output += d.toString();
-            const m = /PORT (\d+)\n/.exec(output);
-            if (m) res(Number(m[1]));
+            const m = /PORT (\d+)\r?\n/.exec(output);
+            if (m)
+            {
+                clearTimeout(timer);
+                res(Number(m[1]));
+            }
         });
-        p.on("exit", () => rej(new Error("Test server exited")));
+        p.on("exit", () =>
+        {
+            clearTimeout(timer);
+            rej(new Error("Test server exited"));
+        });
     });
     return {
         process: p,

@@ -28,6 +28,12 @@ import type { TlsTestServer } from "./TlsServer.js";
 const tls = new TlsTestServers();
 const { certs, ca, intermediate } = tls;
 
+// On Windows, Core usually uses Schannel, which finds a node's certificate in the certificate store
+// by the node's own ID, and trusts certificate authorities for every server at once. So a server
+// presenting another node's certificate, or one that trusts a different authority from the others,
+// cannot be made there
+const schannel = process.platform === "win32";
+
 let server: TlsTestServer;
 let impostor: TlsTestServer;
 let no_client_ca: TlsTestServer;
@@ -35,8 +41,11 @@ let no_client_ca: TlsTestServer;
 before(async () =>
 {
     server = await tls.start("server");
-    impostor = await tls.start("impostor", NodeID.newUniqueID(), NodeID.newUniqueID());
-    no_client_ca = await tls.start("no_client_ca", NodeID.newUniqueID(), NodeID.Any, false);
+    if (!schannel)
+    {
+        impostor = await tls.start("impostor", NodeID.newUniqueID(), NodeID.newUniqueID());
+        no_client_ca = await tls.start("no_client_ca", NodeID.newUniqueID(), NodeID.Any, false);
+    }
 }, { timeout: 60000 });
 
 after(() => tls.close());
@@ -89,7 +98,7 @@ test("rrs+tcp refuses a server whose certificate is not trusted", { timeout: 300
     });
 });
 
-test("rrs+tcp refuses a server whose certificate is for another node", { timeout: 30000 }, async () =>
+test("rrs+tcp refuses a server whose certificate is for another node", { timeout: 30000, skip: schannel && "Schannel cannot present another node's certificate" }, async () =>
 {
     await withNode(trust_test_ca, async (node) =>
     {
@@ -102,7 +111,8 @@ test("rrs+tcp is refused by a server that is not the requested node", { timeout:
 {
     await withNode(trust_test_ca, async (node) =>
     {
-        await assert.rejects(node.connectService(url(server, `nodeid=${id_of(impostor)}&`)), named("RobotRaconteur.NodeNotFound"));
+        const other = NodeID.newUniqueID().toString().slice(1, -1);
+        await assert.rejects(node.connectService(url(server, `nodeid=${other}&`)), named("RobotRaconteur.NodeNotFound"));
     });
 });
 
@@ -124,6 +134,7 @@ test("a client certificate is accepted by a server that trusts it", { timeout: 3
     }, client_id);
 
     // Core checks it: a server that does not trust its issuer refuses the connection
+    if (schannel) return;
     await withNode(options, async (node) =>
     {
         await assert.rejects(node.connectService(url(no_client_ca)));
