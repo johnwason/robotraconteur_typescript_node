@@ -8,10 +8,10 @@ Requires Node.js 22 or newer.
 
 ## Installing
 
-Neither package is on npm yet. This package needs the `node-split` branch of the shared package, in a folder next to this one:
+Neither package is on npm yet. This package needs the shared package in a folder next to this one:
 
 ```sh
-git clone -b node-split https://github.com/johnwason/robotraconteur_typescript.git
+git clone https://github.com/johnwason/robotraconteur_typescript.git
 git clone https://github.com/johnwason/robotraconteur_typescript_node.git
 
 cd robotraconteur_typescript
@@ -110,7 +110,7 @@ manager.updateSubscription({ name: "arm", urls: ["rr+tcp://localhost:52702?servi
 manager.close();
 ```
 
-The wire, pipe, and client functions are described in the [robotraconteur README](https://github.com/johnwason/robotraconteur_typescript/tree/node-split#staying-connected). A subscription keeps the program running until it is closed or `node.shutdown()` is called.
+The wire, pipe, and client functions are described in the [robotraconteur README](https://github.com/johnwason/robotraconteur_typescript/tree/dev#staying-connected). A subscription keeps the program running until it is closed or `node.shutdown()` is called.
 
 The filter passed as the second argument has these optional fields:
 

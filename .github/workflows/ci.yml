@@ -13,7 +13,7 @@ env:
   PYTHON_VERSION: "3.12"
   RR_CORE_VERSION: v1.2.9
   # Until the split is merged, this package needs this branch of the shared package
-  RR_SHARED_REF: node-split
+  RR_SHARED_REF: dev
 
 jobs:
   test:
