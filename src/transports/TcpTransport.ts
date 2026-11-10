@@ -12,18 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { X509Certificate } from "node:crypto";
 import { connect, isIPv6, Socket } from "node:net";
 import { networkInterfaces } from "node:os";
-import { parseConnectionUrl } from "robotraconteur";
+import { connect as tlsConnect, TLSSocket } from "node:tls";
+import { parseConnectionUrl, RobotRaconteurError } from "robotraconteur";
 import type { Endpoint, ITransportConnection, RobotRaconteurNode, Transport } from "robotraconteur";
-import { connectionError, StreamClientConnection } from "robotraconteur/internal";
-import type { SocketAdapter, SocketEvents, StreamTransportParent } from "robotraconteur/internal";
+import { connectionError, MessageErrorType, StreamClientConnection } from "robotraconteur/internal";
+import type { SocketAdapter, SocketEvents, StreamTransportParent, TlsStarter } from "robotraconteur/internal";
+import { CertificateError, verifyNodeCertificate } from "./NodeCertificate.js";
+import { ROOT_CA_2015, ROOT_CA_2020 } from "./RootCertificates.js";
 import type { WebSocket as WsWebSocket } from "ws";
 import { interfaceScope, isIPv6LinkLocal } from "./NetworkUtil.js";
 import { IPNodeDiscovery, IPNodeDiscoveryFlags } from "./IPNodeDiscovery.js";
 import type { NodeAnnouncement } from "./IPNodeDiscovery.js";
 
-/** A connected net.Socket, using the write return value and drain event for backpressure */
+/** A connected net.Socket or TLS socket, using the write return value and drain event for backpressure */
 class TcpSocketAdapter implements SocketAdapter
 {
     constructor(private socket: Socket) {}
@@ -131,6 +135,119 @@ async function openWebSocket(url: string, timeout: number, options: WebSocketCli
     return new WebSocketAdapter(ws);
 }
 
+/** Options for rrs+tcp connections, which use TLS with Robot Raconteur node certificates */
+export interface TlsClientOptions
+{
+    /**
+     * Root certificates to trust, as PEM or DER, for a site with its own certificate authority. Its
+     * certificates must carry the same Robot Raconteur extensions as node certificates.
+     */
+    trustedRoots?: (string | Buffer)[];
+    /**
+     * Trust the Robot Raconteur root certificates built into Core. Defaults to true. As in Core, the
+     * environment variables ROBOTRACONTEUR_NO_DEFAULT_ROOT_CERT, ROBOTRACONTEUR_NO_DEFAULT_ROOT_CERT_2015,
+     * and ROBOTRACONTEUR_NO_DEFAULT_ROOT_CERT_2020 set to true turn them off.
+     */
+    useDefaultRoots?: boolean;
+    /**
+     * A certificate and key for this node as PKCS#12, sent to servers that check clients. It must be
+     * the certificate for the node ID of this node.
+     */
+    clientCertificate?: { pfx: string | Buffer; passphrase?: string };
+}
+
+function envTrue(name: string): boolean
+{
+    const v = process.env[name]?.trim().toLowerCase();
+    return v === "true" || v === "1";
+}
+
+function trustedRoots(options: TlsClientOptions): X509Certificate[]
+{
+    const roots: string[] = [];
+    if (options.useDefaultRoots ?? true)
+    {
+        const none = envTrue("ROBOTRACONTEUR_NO_DEFAULT_ROOT_CERT");
+        if (!none && !envTrue("ROBOTRACONTEUR_NO_DEFAULT_ROOT_CERT_2015")) roots.push(ROOT_CA_2015);
+        if (!none && !envTrue("ROBOTRACONTEUR_NO_DEFAULT_ROOT_CERT_2020")) roots.push(ROOT_CA_2020);
+    }
+    return [...roots, ...(options.trustedRoots ?? [])].map((r) => new X509Certificate(r));
+}
+
+function authenticationError(message: string): RobotRaconteurError
+{
+    return new RobotRaconteurError(MessageErrorType.AuthenticationError, "RobotRaconteur.AuthenticationError", message);
+}
+
+/** The certificates the peer sent, its own first */
+function peerChain(s: TLSSocket): Uint8Array[]
+{
+    const out: Uint8Array[] = [];
+    const seen = new Set<string>();
+    for (let c = s.getPeerCertificate(true); c?.raw && !seen.has(c.fingerprint256); c = c.issuerCertificate)
+    {
+        seen.add(c.fingerprint256);
+        out.push(c.raw);
+    }
+    return out;
+}
+
+/**
+ * Switch a connected socket to TLS. The verification of Node.js is turned off because it rejects
+ * every node certificate, so the chain is checked by verifyNodeCertificate before any data is sent.
+ */
+function tlsStarter(socket: Socket, listeners: { data: (d: Buffer) => void; close: () => void }, node: RobotRaconteurNode, options: TlsClientOptions, timeout: number): TlsStarter
+{
+    return async (events, peer) =>
+    {
+        socket.off("data", listeners.data);
+        socket.off("close", listeners.close);
+        const client = peer.mutualAuth ? options.clientCertificate : undefined;
+
+        const s = await new Promise<TLSSocket>((resolve, reject) =>
+        {
+            const t = tlsConnect({ socket, rejectUnauthorized: false, minVersion: "TLSv1.2", ...(client ? { pfx: client.pfx, passphrase: client.passphrase } : {}) });
+            const timer = setTimeout(() =>
+            {
+                t.destroy();
+                reject(connectionError("Timed out starting TLS"));
+            }, timeout);
+            t.once("secureConnect", () =>
+            {
+                clearTimeout(timer);
+                resolve(t);
+            });
+            t.once("error", (e) =>
+            {
+                clearTimeout(timer);
+                t.destroy();
+                reject(connectionError("Could not start TLS: " + e.message));
+            });
+        });
+
+        try
+        {
+            verifyNodeCertificate(peerChain(s), { roots: trustedRoots(options), nodeID: peer.nodeID });
+            if (client)
+            {
+                const own = s.getX509Certificate();
+                const expected = `CN=Robot Raconteur Node ${node.nodeID.toString()}`;
+                if (own?.subject !== expected) throw new CertificateError(`The client certificate is not for this node, ${node.nodeID.toString()}`);
+            }
+        }
+        catch (e)
+        {
+            s.destroy();
+            throw authenticationError("Could not verify TLS certificate: " + (e as Error).message);
+        }
+
+        s.on("data", (d: Buffer) => events.onData(d));
+        s.on("error", () => undefined); // Always followed by close
+        s.on("close", () => events.onClose());
+        return new TcpSocketAdapter(s);
+    };
+}
+
 function openSocket(host: string, port: number, timeout: number): Promise<Socket>
 {
     return new Promise<Socket>((resolve, reject) =>
@@ -200,8 +317,8 @@ async function connectAny(hosts: string[], port: number, timeout: number): Promi
 }
 
 /**
- * Client transport for rr+tcp using a TCP socket, and for rr+ws and rr+wss using a WebSocket. Also
- * discovers nodes using UDP.
+ * Client transport for rr+tcp and rrs+tcp using a TCP socket, and for rr+ws and rr+wss using a
+ * WebSocket. Also discovers nodes using UDP.
  */
 export class TcpTransport implements Transport, StreamTransportParent
 {
@@ -213,6 +330,8 @@ export class TcpTransport implements Transport, StreamTransportParent
     maxMessageSize = 12 * 1024 * 1024;
     /** Options for rr+ws and rr+wss connections */
     webSocketOptions: WebSocketClientOptions = {};
+    /** Options for rrs+tcp connections */
+    tlsOptions: TlsClientOptions = {};
 
     private connections = new Set<StreamClientConnection>();
     private discovery: IPNodeDiscovery | null = null;
@@ -221,7 +340,7 @@ export class TcpTransport implements Transport, StreamTransportParent
 
     canConnectService(url: string): boolean
     {
-        return ["tcp", "rr+tcp", "rr+ws", "rr+wss"].includes(parseConnectionUrl(url).scheme);
+        return ["tcp", "rr+tcp", "rrs+tcp", "rr+ws", "rr+wss"].includes(parseConnectionUrl(url).scheme);
     }
 
     async createTransportConnection(url: string, endpoint: Endpoint): Promise<ITransportConnection>
@@ -231,7 +350,8 @@ export class TcpTransport implements Transport, StreamTransportParent
 
         const c = new StreamClientConnection(this, u.nodeid, u.nodename, endpoint);
         const websocket = u.scheme === "rr+ws" || u.scheme === "rr+wss";
-        await c.connect(async (events) =>
+        let start_tls: TlsStarter | undefined;
+        const open = async (events: SocketEvents): Promise<SocketAdapter> =>
         {
             if (websocket)
             {
@@ -239,11 +359,23 @@ export class TcpTransport implements Transport, StreamTransportParent
                 return openWebSocket(ws_url, this.defaultConnectTimeout, this.webSocketOptions, events);
             }
             const socket = await connectAny(candidateHosts(u.host), u.port, this.defaultConnectTimeout);
-            socket.on("data", (data) => events.onData(data));
+            const listeners = { data: (data: Buffer) => events.onData(data), close: () => events.onClose() };
+            socket.on("data", listeners.data);
             socket.on("error", () => undefined); // Always followed by close
-            socket.on("close", () => events.onClose());
+            socket.on("close", listeners.close);
+            start_tls = tlsStarter(socket, listeners, this.node, this.tlsOptions, this.defaultConnectTimeout);
             return new TcpSocketAdapter(socket);
-        });
+        };
+
+        if (u.scheme === "rrs+tcp")
+        {
+            // TLS starts after the socket opens, so the starter is looked up when it is needed
+            await c.connect(open, { start: (events, peer) => start_tls!(events, peer), mutualAuth: this.tlsOptions.clientCertificate !== undefined });
+        }
+        else
+        {
+            await c.connect(open);
+        }
         this.connections.add(c);
         return c;
     }

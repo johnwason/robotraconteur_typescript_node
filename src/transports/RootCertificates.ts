@@ -1,0 +1,85 @@
+// Copyright 2011-2026 Wason Technology, LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// The Robot Raconteur node root certificates built into Core, in RobotRaconteurNodeRootCA.h. Node
+// certificates are issued under these unless a service uses its own certificate authority.
+
+/** Robot Raconteur Node Root CA, valid 2015 to 2045 */
+export const ROOT_CA_2015 = `-----BEGIN CERTIFICATE-----
+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
+-----END CERTIFICATE-----`;
+
+/** Robot Raconteur Node Root CA 2, valid 2020 to 2060 */
+export const ROOT_CA_2020 = `-----BEGIN CERTIFICATE-----
+MIIFhjCCA26gAwIBAgIBATANBgkqhkiG9w0BAQsFADBWMQswCQYDVQQGEwJVUzEe
+MBwGA1UECgwVV2Fzb24gVGVjaG5vbG9neSwgTExDMScwJQYDVQQDDB5Sb2JvdCBS
+YWNvbnRldXIgTm9kZSBSb290IENBIDIwIBcNMjAxMTIzMDA1MDAyWhgPMjA2MDEx
+MTMwMDUwMDJaMFYxCzAJBgNVBAYTAlVTMR4wHAYDVQQKDBVXYXNvbiBUZWNobm9s
+b2d5LCBMTEMxJzAlBgNVBAMMHlJvYm90IFJhY29udGV1ciBOb2RlIFJvb3QgQ0Eg
+MjCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAMhrHzVNDFqvH3HZbQG3
+7DYTOENz/905J2uGy159MQ3HVt0Bc613ukAPDC2JGWWVoRzRCbKfIqc4jjQWuyEu
+UhgkdM3C0m5WT9aI3uOyiZT6zj7ZCX6IpIMdcsZveP2+qiFGGF1Jq3UJK+qqWNex
+aas6NQYNWFYo4tiMJZc/JGyfXYjkDSCdxyYUJAN0WKd4fLa43AC3lFPC7R66MCZB
+gcPb85iP2JV1dYVaY3uYdZvfV/XtDLV9nFkOge/rbMN8cFxrxPod28PgvHKLp2qx
+SQPK440tu8jaG+gXCA8U4wHNifSESGWGn3++gfHTSfv3B/GrL3Dl+MdwrPduQ/FL
+oCEZf+hFFYPYf9b5oMjcYLU4JKUq3dbqGsYz1fxHLAlt76uR29JgzbQILBW1It/S
+kBuyTeWvkTj9KVR3DmF/6zB+JVXnkExQv4aCiuP2bwmChyyGDBpqkpgv6wqgIE1e
+pSWA4Lr2ZXzhPet8dOUwaslEvcFx17GxDIcztn0tU7SCGp9DLiIYJ5paV7Wt2orH
+bQlQEAPou1+8OzeOhkYauxmdAtrTfHjzUPzzzdHZHeTWQCEt+0rrAPvYhIEB3M7L
+CoD3NqC6COU0vYqE9Js5Ym6WhDt395MrO0LixSsVibivekNZXehgnlL6Vpa65AcF
+oQhvSnCLrXNaoZsY9Wm1FH+JAgMBAAGjXTBbMA4GA1UdDwEB/wQEAwIBBjASBgNV
+HRMBAf8ECDAGAQH/AgEBMB0GA1UdDgQWBBSFfYnMwc8jOxpZ582TyseWqvBqKjAW
+BgwrBgEEAYLjDwEBAwEBAf8EAwEB/zANBgkqhkiG9w0BAQsFAAOCAgEANRina3nd
+DMKo/LjozMCzEN8Plplqx0973aL+rottZdNk48HPqqdtwUXPP+Nn7YqjuLfFHpgg
+KQJgolOzCUb6YF8DjdpqDd4vAtjhdDVsNdxZjpm+uyOAuK3e43iCalpgsDzA+kkV
+W/1LuZ0EJIHpr3Q7diN50g+dBN2ipfKSfN0ifHqWGSxRsQ+GsEUN0CKrvnYrZutj
+IWXAqlEv1o425c1LhMyhqzkJbrIFU11dz42TvgjT4lVuT/bpmg6FwiSyUC5i872e
+8Vt8YWBH+VPH2degI9Zu9X5iwacUO65HdddfZoKHVNWQQxxaMqn1qefjzBez7hzC
+rVwhvcsgRgvwyHHdkmvCCrSBG0JVZqMLE4Lrn/UXG+9Hu8OFMzSW/e9P63AzvzzV
+2cMz+TqRdBTMiESj8VlIHoB/jnPJTVadJ9M73poPbEyOVAyP+5kctB7jmRD6J3pu
+ibzA5npAsZjjKfCLoP4DPB5I53hSsm9s7lAsK/VT8Xsk1TOMUubHKPn1MeXsLXlF
+6yjWI+K/FIOAQflaotxj+XSV/kQXLqEZyBwGPQ4ftSl/Hov6ebty7VHcQV7zhrON
+lEnDZOEgHdcvlzg+ts3aIBn5wAYRZK/OmudYvsbd4R0Ta29WP5r4yAoRM+BCLabN
+46bNZ/0uwMlOIoafDDMrzJw62Vb5kFvsPWo=
+-----END CERTIFICATE-----`;

@@ -48,6 +48,31 @@ tcp.webSocketOptions = { ca: readFileSync("my-ca.pem") };
 node.registerTransport(tcp);
 ```
 
+## Secure connections
+
+`rrs+tcp` URLs use TLS, checking the service's Robot Raconteur node certificate as Core does. The certificate must lead to one of the Robot Raconteur root certificates built into Core, and must be for the node that answers, or for the node named in the URL. Naming the node ID in the URL is the way to be sure of which node you are talking to.
+
+```js
+const reynard = await node.connectService("rrs+tcp://localhost:29200?nodeid=e4605d17-ed15-4052-895f-30927eb1623a&service=reynard");
+```
+
+`tlsOptions` sets where trust comes from, and a certificate for this node if the service checks clients:
+
+```js
+const tcp = new TcpTransport(node);
+tcp.tlsOptions = {
+    // A site's own certificate authority, in place of the built-in roots
+    trustedRoots: [readFileSync("site-root.pem")],
+    useDefaultRoots: false,
+    // This node's certificate and key. The node ID must match the certificate
+    clientCertificate: { pfx: readFileSync("{e51a88ce-0c8f-4792-867e-5386ec6e654b}.p12") }
+};
+node.nodeID = new NodeID("{e51a88ce-0c8f-4792-867e-5386ec6e654b}");
+node.registerTransport(tcp);
+```
+
+Node certificates mark each level of their chain with a critical extension that OpenSSL does not recognize, so the TLS module of Node.js rejects all of them. The package turns its check off and checks the chain itself before anything else is sent: signatures, dates, certificate authority flags and path lengths, the Robot Raconteur extension for each level, and the node named in the certificate. `verifyNodeCertificate` performs the same check on its own.
+
 ## Finding services
 
 ```js
@@ -180,7 +205,7 @@ RR_TEST_SERVER_SCRIPT=test/server/rr_cpp_test_server.py ./scripts/podman-run.sh 
 ./scripts/podman-run.sh npm run test:extra
 ```
 
-The tests reuse the shared package's client test suite over `rr+tcp` and `rr+ws`, against Core's Python test server by default or its C++ test server when selected as above. `npm run test:extra` connects to public test servers, as Core's extra tests do, so it needs internet access and is not part of `npm test`.
+The tests reuse the shared package's client test suite over `rr+tcp` and `rr+ws`, against Core's Python test server by default or its C++ test server when selected as above. `npm run test:extra` connects to public test servers, as Core's extra tests do, so it needs internet access and is not part of `npm test`. It also tests `rrs+tcp` with real node certificates when `RR_NODE_CERTIFICATES` is set to a folder of two or more `{nodeid}.p12` files. Those include private keys, so they are not in this repository. The other `rrs+tcp` tests use a certificate authority made with openssl during the test.
 
 ## License
 

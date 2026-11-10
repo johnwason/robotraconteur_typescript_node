@@ -13,7 +13,9 @@
 // limitations under the License.
 
 export { TcpTransport } from "./transports/TcpTransport.js";
-export type { WebSocketClientOptions } from "./transports/TcpTransport.js";
+export type { TlsClientOptions, WebSocketClientOptions } from "./transports/TcpTransport.js";
+export { CertificateError, verifyNodeCertificate } from "./transports/NodeCertificate.js";
+export type { NodeCertificateOptions } from "./transports/NodeCertificate.js";
 export { IPNodeDiscoveryFlags, parseNodeAnnouncement } from "./transports/IPNodeDiscovery.js";
 export type { NodeAnnouncement } from "./transports/IPNodeDiscovery.js";
 export { NodeDiscovery } from "./discovery/NodeDiscovery.js";
