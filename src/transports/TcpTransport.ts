@@ -13,9 +13,12 @@
 // limitations under the License.
 
 import { X509Certificate } from "node:crypto";
+import { lookup as dnsLookup } from "node:dns";
+import type { LookupAddress, LookupOptions } from "node:dns";
 import { lookup } from "node:dns/promises";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { connect, isIP, isIPv6, Socket } from "node:net";
+import type { LookupFunction } from "node:net";
 import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { connect as tlsConnect, TLSSocket } from "node:tls";
@@ -119,17 +122,32 @@ export class WebSocketAdapter implements SocketAdapter
     }
 }
 
+const LOOPBACK: LookupAddress[] = [{ address: "127.0.0.1", family: 4 }, { address: "::1", family: 6 }];
+
+/** Host lookup for WebSockets that, like candidateHosts, gives both loopback addresses for localhost */
+const webSocketLookup = ((hostname: string, options: LookupOptions, callback: (err: Error | null, address: string | LookupAddress[], family?: number) => void) =>
+{
+    if (hostname.toLowerCase() !== "localhost")
+    {
+        dnsLookup(hostname, options, callback as never);
+        return;
+    }
+    const addresses = LOOPBACK.filter((a) => !options.family || a.family === options.family);
+    if (options.all) callback(null, addresses);
+    else callback(null, addresses[0]!.address, addresses[0]!.family);
+}) as LookupFunction;
+
 async function openWebSocket(url: string, timeout: number, options: WebSocketClientOptions, events: SocketEvents): Promise<SocketAdapter>
 {
     // Loaded only when needed, so that rr+tcp works without it
     const { WebSocket } = await import("ws");
-    const ws = new WebSocket(url, WEBSOCKET_PROTOCOL, { ...options, handshakeTimeout: timeout, perMessageDeflate: false });
+    const ws = new WebSocket(url, WEBSOCKET_PROTOCOL, { lookup: webSocketLookup, ...options, handshakeTimeout: timeout, perMessageDeflate: false });
     await new Promise<void>((resolve, reject) =>
     {
-        const on_error = () =>
+        const on_error = (err: Error) =>
         {
             ws.terminate();
-            reject(connectionError("Could not connect to WebSocket endpoint"));
+            reject(connectionError(`Could not connect to WebSocket endpoint ${url}: ${err.message}`));
         };
         ws.once("error", on_error);
         ws.once("open", () =>
