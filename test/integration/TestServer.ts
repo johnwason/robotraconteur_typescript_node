@@ -32,11 +32,14 @@ export interface TestServer
     stop(): void;
 }
 
+/** The Python interpreter. Windows usually has no python3 command */
+export const PYTHON = process.env.PYTHON ?? (process.platform === "win32" ? "python" : "python3");
+
 /** Start a Core test server. RR_TEST_SERVER_SCRIPT selects the C++ server instead of Python */
 export async function startTestServer(): Promise<TestServer>
 {
     const script = process.env.RR_TEST_SERVER_SCRIPT ?? "test/server/rr_test_server.py";
-    const p = spawn("python3", ["-u", join(shared, script)], {
+    const p = spawn(PYTHON, ["-u", join(shared, script)], {
         env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
         stdio: ["pipe", "pipe", "inherit"]
     });

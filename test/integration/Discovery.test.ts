@@ -406,7 +406,7 @@ describe("node discovery", { skip: has_link_local ? false : "no IPv6 link-local 
         finally
         {
             tcp.tlsOptions = saved;
-            tls.close();
+            await tls.close();
         }
     });
 
