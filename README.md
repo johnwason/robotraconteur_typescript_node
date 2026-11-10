@@ -71,6 +71,10 @@ node.nodeID = new NodeID("{e51a88ce-0c8f-4792-867e-5386ec6e654b}");
 node.registerTransport(tcp);
 ```
 
+To load this node's certificate from where Core keeps it, `certificates/{nodeid}.p12` in Core's configuration folder (`~/.config/RobotRaconteur` on Linux and macOS, `%LOCALAPPDATA%\RobotRaconteur` on Windows), set the node ID and call `loadTlsNodeCertificate()`. As in Core, the PEM file named by `ROBOTRACONTEUR_SSL_CERT_FILE` and the folder named by `ROBOTRACONTEUR_SSL_CERT_DIR` add trusted roots.
+
+Set `tcp.requireTls = true` to refuse any URL other than `rrs+tcp`. For a connected client, `tcp.isTransportConnectionSecure(client)` and `tcp.isSecurePeerIdentityVerified(client)` report whether it uses TLS with a verified certificate, and `tcp.getSecurePeerIdentity(client)` returns the verified node ID.
+
 Node certificates mark each level of their chain with a critical extension that OpenSSL does not recognize, so the TLS module of Node.js rejects all of them. The package turns its check off and checks the chain itself before anything else is sent: signatures, dates, certificate authority flags and path lengths, the Robot Raconteur extension for each level, and the node named in the certificate. `verifyNodeCertificate` performs the same check on its own.
 
 ## Finding services

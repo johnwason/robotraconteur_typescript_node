@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import { ChildProcess, spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { NodeID, RobotRaconteurNode } from "robotraconteur";
@@ -86,7 +86,7 @@ const trust_test_ca: TlsClientOptions = { trustedRoots: [ca.pem], useDefaultRoot
 const id_of = (s: Server) => s.id.toString().slice(1, -1);
 const url = (s: Server, query = `nodeid=${id_of(s)}&`) => `rrs+tcp://localhost:${s.port}?${query}service=test_service`;
 
-async function withNode<T>(options: TlsClientOptions, fn: (node: RobotRaconteurNode) => Promise<T>, node_id?: NodeID): Promise<T>
+async function withNode<T>(options: TlsClientOptions, fn: (node: RobotRaconteurNode, tcp: TcpTransport) => Promise<T>, node_id?: NodeID): Promise<T>
 {
     const node = new RobotRaconteurNode();
     if (node_id) node.nodeID = node_id;
@@ -95,7 +95,7 @@ async function withNode<T>(options: TlsClientOptions, fn: (node: RobotRaconteurN
     node.registerTransport(tcp);
     try
     {
-        return await fn(node);
+        return await fn(node, tcp);
     }
     finally
     {
@@ -178,4 +178,86 @@ test("a client certificate must be for this node", { timeout: 30000 }, async () 
     {
         await assert.rejects(node.connectService(url(server)), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.AuthenticationError" && /not for this node/.test(e.message));
     });
+});
+
+test("the transport reports a secure connection and the verified node", { timeout: 30000 }, async () =>
+{
+    await withNode(trust_test_ca, async (node, tcp) =>
+    {
+        const c = await node.connectService(url(server, ""));
+        assert.ok(tcp.isTransportConnectionSecure(c));
+        assert.ok(tcp.isSecurePeerIdentityVerified(c));
+        assert.equal(tcp.getSecurePeerIdentity(c), server.id.toString());
+    });
+});
+
+test("requireTls only allows rrs+tcp", { timeout: 30000 }, async () =>
+{
+    await withNode(trust_test_ca, async (node, tcp) =>
+    {
+        tcp.requireTls = true;
+        await assert.rejects(node.connectService(`rr+tcp://localhost:${server.port}?service=test_service`), /TLS is required/);
+        await assert.rejects(node.connectService(`rr+ws://localhost:${server.port}?service=test_service`), /TLS is required/);
+        const c = await node.connectService(url(server));
+        assert.equal(await c.callFunction("add_two_numbers", [2, 4]), 6);
+    });
+});
+
+/** Set environment variables while running fn, then restore them */
+async function withEnv(vars: Record<string, string>, fn: () => Promise<void>): Promise<void>
+{
+    const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, vars);
+    try
+    {
+        await fn();
+    }
+    finally
+    {
+        for (const [k, v] of Object.entries(saved))
+        {
+            if (v === undefined) delete process.env[k];
+            else process.env[k] = v;
+        }
+    }
+}
+
+test("the node certificate is loaded from Core's configuration folder", { timeout: 30000 }, async () =>
+{
+    const config = join(certs.dir, "client_config");
+    mkdirSync(join(config, "certificates"), { recursive: true });
+    copyFileSync(client_p12, join(config, "certificates", client_id.toString() + ".p12"));
+    // Core uses the system folder when running as root, as in the test container
+    await withEnv({ ROBOTRACONTEUR_USER_CONFIG_DIR: config, ROBOTRACONTEUR_SYSTEM_CONFIG_DIR: config }, async () =>
+    {
+        await withNode(trust_test_ca, async (node, tcp) =>
+        {
+            assert.ok(!tcp.isTlsNodeCertificateLoaded);
+            tcp.loadTlsNodeCertificate();
+            assert.ok(tcp.isTlsNodeCertificateLoaded);
+            const c = await node.connectService(url(server));
+            assert.equal(await c.callFunction("add_two_numbers", [2, 4]), 6);
+        }, client_id);
+
+        await withNode(trust_test_ca, async (_node, tcp) =>
+        {
+            assert.throws(() => tcp.loadTlsNodeCertificate(), /Could not load node certificate/);
+        });
+    });
+});
+
+test("Core's certificate file and folder variables add trusted roots", { timeout: 30000 }, async () =>
+{
+    const connect = () => withNode({ useDefaultRoots: false }, async (node) =>
+    {
+        const c = await node.connectService(url(server));
+        assert.equal(await c.callFunction("add_two_numbers", [2, 4]), 6);
+    });
+    await assert.rejects(connect(), /not issued by a trusted/);
+    await withEnv({ ROBOTRACONTEUR_SSL_CERT_FILE: ca.certFile }, connect);
+
+    const dir = join(certs.dir, "ca_dir");
+    mkdirSync(dir, { recursive: true });
+    copyFileSync(ca.certFile, join(dir, "site-root.pem"));
+    await withEnv({ ROBOTRACONTEUR_SSL_CERT_DIR: dir }, connect);
 });

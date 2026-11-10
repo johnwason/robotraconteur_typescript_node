@@ -13,14 +13,17 @@
 // limitations under the License.
 
 import { X509Certificate } from "node:crypto";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { connect, isIPv6, Socket } from "node:net";
 import { networkInterfaces } from "node:os";
+import { join } from "node:path";
 import { connect as tlsConnect, TLSSocket } from "node:tls";
 import { parseConnectionUrl, RobotRaconteurError } from "robotraconteur";
-import type { Endpoint, ITransportConnection, RobotRaconteurNode, Transport } from "robotraconteur";
+import type { Endpoint, ITransportConnection, RobotRaconteurNode, ServiceStub, Transport } from "robotraconteur";
 import { connectionError, MessageErrorType, StreamClientConnection } from "robotraconteur/internal";
 import type { SocketAdapter, SocketEvents, StreamTransportParent, TlsStarter } from "robotraconteur/internal";
 import { CertificateError, verifyNodeCertificate } from "./NodeCertificate.js";
+import { userConfigDir } from "./NodeDirectories.js";
 import { ROOT_CA_2015, ROOT_CA_2020 } from "./RootCertificates.js";
 import type { WebSocket as WsWebSocket } from "ws";
 import { interfaceScope, isIPv6LinkLocal } from "./NetworkUtil.js";
@@ -146,7 +149,9 @@ export interface TlsClientOptions
     /**
      * Trust the Robot Raconteur root certificates built into Core. Defaults to true. As in Core, the
      * environment variables ROBOTRACONTEUR_NO_DEFAULT_ROOT_CERT, ROBOTRACONTEUR_NO_DEFAULT_ROOT_CERT_2015,
-     * and ROBOTRACONTEUR_NO_DEFAULT_ROOT_CERT_2020 set to true turn them off.
+     * and ROBOTRACONTEUR_NO_DEFAULT_ROOT_CERT_2020 set to true turn them off. Also as in Core,
+     * certificates in the PEM files named by ROBOTRACONTEUR_SSL_CERT_FILE, or in the folder named by
+     * ROBOTRACONTEUR_SSL_CERT_DIR, are trusted as well.
      */
     useDefaultRoots?: boolean;
     /**
@@ -171,7 +176,54 @@ function trustedRoots(options: TlsClientOptions): X509Certificate[]
         if (!none && !envTrue("ROBOTRACONTEUR_NO_DEFAULT_ROOT_CERT_2015")) roots.push(ROOT_CA_2015);
         if (!none && !envTrue("ROBOTRACONTEUR_NO_DEFAULT_ROOT_CERT_2020")) roots.push(ROOT_CA_2020);
     }
-    return [...roots, ...(options.trustedRoots ?? [])].map((r) => new X509Certificate(r));
+    return [...roots, ...environmentRoots(), ...(options.trustedRoots ?? [])].map((r) => new X509Certificate(r));
+}
+
+function pemCertificates(file: string): string[]
+{
+    try
+    {
+        return readFileSync(file, "utf8").match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) ?? [];
+    }
+    catch
+    {
+        // As in Core, a file that cannot be read is skipped
+        return [];
+    }
+}
+
+/** Certificates trusted through the environment variables Core reads */
+function environmentRoots(): string[]
+{
+    const out: string[] = [];
+    const file = process.env.ROBOTRACONTEUR_SSL_CERT_FILE;
+    if (file) out.push(...pemCertificates(file));
+    const dir = process.env.ROBOTRACONTEUR_SSL_CERT_DIR;
+    if (dir)
+    {
+        let names: string[] = [];
+        try
+        {
+            names = readdirSync(dir);
+        }
+        catch
+        {
+            // Skipped, as above
+        }
+        for (const n of names)
+        {
+            const p = join(dir, n);
+            try
+            {
+                if (statSync(p).isFile()) out.push(...pemCertificates(p));
+            }
+            catch
+            {
+                // Skipped, as above
+            }
+        }
+    }
+    return out;
 }
 
 function authenticationError(message: string): RobotRaconteurError
@@ -332,6 +384,11 @@ export class TcpTransport implements Transport, StreamTransportParent
     webSocketOptions: WebSocketClientOptions = {};
     /** Options for rrs+tcp connections */
     tlsOptions: TlsClientOptions = {};
+    /**
+     * Only connect using rrs+tcp, so that every connection uses TLS and a verified certificate. As
+     * Core does with RequireTls.
+     */
+    requireTls = false;
 
     private connections = new Set<StreamClientConnection>();
     private discovery: IPNodeDiscovery | null = null;
@@ -347,6 +404,7 @@ export class TcpTransport implements Transport, StreamTransportParent
     {
         const u = parseConnectionUrl(url);
         if (u.host === "") throw connectionError("Invalid connection URL for TCP");
+        if (this.requireTls && u.scheme !== "rrs+tcp") throw connectionError(`TLS is required, so ${u.scheme} cannot be used. Use rrs+tcp`);
 
         const c = new StreamClientConnection(this, u.nodeid, u.nodename, endpoint);
         const websocket = u.scheme === "rr+ws" || u.scheme === "rr+wss";
@@ -383,6 +441,61 @@ export class TcpTransport implements Transport, StreamTransportParent
     removeConnection(c: StreamClientConnection): void
     {
         this.connections.delete(c);
+    }
+
+    private connectionOf(client: ServiceStub): StreamClientConnection
+    {
+        const c = client.context.transportConnection as StreamClientConnection | null;
+        if (!c || !this.connections.has(c)) throw connectionError("The client is not connected using this transport");
+        return c;
+    }
+
+    /** Whether a client's connection uses TLS. Throws if it is not connected using this transport */
+    isTransportConnectionSecure(client: ServiceStub): boolean
+    {
+        return this.connectionOf(client).secure;
+    }
+
+    /**
+     * Whether the service's node certificate has been verified. TLS is only used once it has been,
+     * so this is the same as isTransportConnectionSecure.
+     */
+    isSecurePeerIdentityVerified(client: ServiceStub): boolean
+    {
+        return this.connectionOf(client).secure;
+    }
+
+    /** The node ID of the service, verified by its certificate. Throws if it has not been verified */
+    getSecurePeerIdentity(client: ServiceStub): string
+    {
+        const c = this.connectionOf(client);
+        if (!c.secure) throw authenticationError("Peer identity is not verified");
+        return c.remoteNodeID.toString();
+    }
+
+    /**
+     * Load the certificate of this node from where Core keeps it, certificates/{nodeid}.p12 in its
+     * configuration folder, to send to services that check clients. Set the node ID first.
+     */
+    loadTlsNodeCertificate(): void
+    {
+        const file = join(userConfigDir(), "certificates", this.node.nodeID.toString() + ".p12");
+        let pfx: Buffer;
+        try
+        {
+            pfx = readFileSync(file);
+        }
+        catch
+        {
+            throw connectionError(`Could not load node certificate ${file}`);
+        }
+        this.tlsOptions = { ...this.tlsOptions, clientCertificate: { pfx } };
+    }
+
+    /** Whether a certificate for this node has been loaded or given in tlsOptions */
+    get isTlsNodeCertificateLoaded(): boolean
+    {
+        return this.tlsOptions.clientCertificate !== undefined;
     }
 
     /** Listen for node announcements. Core uses IPv6 link-local multicast by default */

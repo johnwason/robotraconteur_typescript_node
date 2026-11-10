@@ -134,3 +134,23 @@ async function nodeName(): Promise<string>
     await node.disconnectService(r);
     return name;
 }
+
+test("a plain connection is reported as not secure", { timeout: 30000 }, async () =>
+{
+    const n = new RobotRaconteurNode();
+    const tcp = new TcpTransport(n);
+    n.registerTransport(tcp);
+    try
+    {
+        const c = await n.connectService(`rr+tcp://localhost:${server.port}?service=RobotRaconteurTestService`);
+        assert.ok(!tcp.isTransportConnectionSecure(c));
+        assert.ok(!tcp.isSecurePeerIdentityVerified(c));
+        assert.throws(() => tcp.getSecurePeerIdentity(c), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.AuthenticationError");
+        // Another transport does not know the connection
+        assert.throws(() => new TcpTransport(n).isTransportConnectionSecure(c), /not connected using this transport/);
+    }
+    finally
+    {
+        await n.shutdown();
+    }
+});

@@ -15,6 +15,7 @@
 export { TcpTransport } from "./transports/TcpTransport.js";
 export type { TlsClientOptions, WebSocketClientOptions } from "./transports/TcpTransport.js";
 export { CertificateError, verifyNodeCertificate } from "./transports/NodeCertificate.js";
+export { userConfigDir } from "./transports/NodeDirectories.js";
 export type { NodeCertificateOptions } from "./transports/NodeCertificate.js";
 export { IPNodeDiscoveryFlags, parseNodeAnnouncement } from "./transports/IPNodeDiscovery.js";
 export type { NodeAnnouncement } from "./transports/IPNodeDiscovery.js";
