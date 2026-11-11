@@ -16,7 +16,6 @@
 
 import { RobotRaconteurError } from "robotraconteur";
 import { MessageErrorType } from "robotraconteur/internal";
-import { OBJECT_LOCKED_ERROR } from "./Security.js";
 import type { ServiceSkel } from "./ServiceSkel.js";
 
 /** A monitor lock is released if its client sends nothing to the object for this long, as in Core */
@@ -26,7 +25,7 @@ const MONITOR_ENTER_WAIT = 5000;
 
 export function objectLockedError(message: string): RobotRaconteurError
 {
-    return new RobotRaconteurError(OBJECT_LOCKED_ERROR, "RobotRaconteur.ObjectLockedError", message);
+    return new RobotRaconteurError(MessageErrorType.ObjectLockedError, "RobotRaconteur.ObjectLockedError", message);
 }
 
 function invalidOperation(message: string): RobotRaconteurError

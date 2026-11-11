@@ -18,7 +18,7 @@ import type { Endpoint, NodeID, VarValue, RobotRaconteurNode, ServiceDefinition,
 import type { ServerTransportConnection } from "../transports/StreamConnections.js";
 import { DataTypes, errorToEntry, getElement, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, packElement, TypeContext, unpackElement } from "robotraconteur/internal";
 import { ObjectLock, objectLockedError } from "./Locks.js";
-import { authenticationError, PERMISSION_DENIED } from "./Security.js";
+import { authenticationError } from "./Security.js";
 import type { AuthenticatedUser, ServiceSecurityPolicy } from "./Security.js";
 import { serviceError, ServiceSkel } from "./ServiceSkel.js";
 import type { ServiceObject } from "./ServiceSkel.js";
@@ -265,7 +265,7 @@ export class ServerContext
     checkAuthenticated(ep: ServerEndpoint): void
     {
         if (!this.requireValidUser) return;
-        if (!ep.authenticatedUser) throw serviceError(PERMISSION_DENIED, "PermissionDenied", "User must authenticate before accessing this service");
+        if (!ep.authenticatedUser) throw serviceError(MessageErrorType.PermissionDenied, "PermissionDenied", "User must authenticate before accessing this service");
         ep.authenticatedUser.updateLastAccess();
     }
 
@@ -587,7 +587,7 @@ export class ServerContext
         }
 
         const user = ep.authenticatedUser;
-        if (!user) throw serviceError(PERMISSION_DENIED, "PermissionDenied", "User must be authenticated to lock object");
+        if (!user) throw serviceError(MessageErrorType.PermissionDenied, "PermissionDenied", "User must be authenticated to lock object");
         if (!user.privileges.includes("objectlock") && !user.privileges.includes("objectlockoverride")) throw objectLockedError("User does not have object locking privileges");
         switch (m.memberName)
         {

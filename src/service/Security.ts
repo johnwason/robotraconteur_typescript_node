@@ -20,10 +20,6 @@ import { RobotRaconteurError, VarValue } from "robotraconteur";
 import { MessageErrorType } from "robotraconteur/internal";
 import type { ServerContext } from "./ServerContext.js";
 
-/** Core's error codes that the shared MessageErrorType does not list yet */
-export const OBJECT_LOCKED_ERROR = 151 as MessageErrorType;
-export const PERMISSION_DENIED = 152 as MessageErrorType;
-
 export function authenticationError(message: string): RobotRaconteurError
 {
     return new RobotRaconteurError(MessageErrorType.AuthenticationError, "RobotRaconteur.AuthenticationError", message);
