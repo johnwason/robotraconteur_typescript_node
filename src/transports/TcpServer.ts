@@ -40,6 +40,10 @@ export function urlHost(socket: { localAddress?: string; localPort?: number }): 
     return `${address.includes(":") ? `[${address}]` : address}:${socket.localPort}`;
 }
 
+/**
+ * The origins Core allows to connect with a WebSocket by default: pages loaded from files, and
+ * robotraconteur.com. A scheme on its own, such as "https://", allows every origin with it.
+ */
 export const DEFAULT_WEBSOCKET_ALLOWED_ORIGINS: readonly string[] = [
     "null",
     "file://",

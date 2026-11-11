@@ -57,9 +57,11 @@ export interface WebSocketClientOptions
     ca?: string | Buffer | (string | Buffer)[];
     /** A client certificate and key, for servers that require one */
     cert?: string | Buffer;
+    /** The key of the client certificate */
     key?: string | Buffer;
     /** Set false only for testing. Defaults to true */
     rejectUnauthorized?: boolean;
+    /** Extra headers for the WebSocket request, such as Origin */
     headers?: Record<string, string>;
 }
 
@@ -106,6 +108,15 @@ async function openWebSocket(url: string, timeout: number, options: WebSocketCli
     return new WebSocketAdapter(ws);
 }
 
+/** A certificate and its key, as PKCS#12 */
+export interface Pkcs12Certificate
+{
+    /** The PKCS#12 data, as from a .p12 file */
+    pfx: string | Buffer;
+    /** The password of the PKCS#12 data, if it has one. Core's node certificates have none */
+    passphrase?: string;
+}
+
 /** Options for rrs+tcp connections, which use TLS with Robot Raconteur node certificates */
 export interface TlsClientOptions
 {
@@ -128,7 +139,7 @@ export interface TlsClientOptions
      * Clients send it to services that check clients, and services present it for rrs+tcp.
      * loadTlsNodeCertificate loads it from where Core keeps it.
      */
-    clientCertificate?: { pfx: string | Buffer; passphrase?: string };
+    clientCertificate?: Pkcs12Certificate;
 }
 
 function envTrue(name: string): boolean
@@ -371,7 +382,9 @@ export class TcpTransport implements Transport, TcpServerParent
     heartbeatPeriod = 5000;
     /** Connection is closed if the remote node has not been heard from for this long in milliseconds */
     defaultReceiveTimeout = 15000;
+    /** Milliseconds to wait for a connection to open */
     defaultConnectTimeout = 5000;
+    /** The largest message to send or receive, in bytes. 12 MB, as Core */
     maxMessageSize = 12 * 1024 * 1024;
     /** Options for rr+ws and rr+wss connections */
     webSocketOptions: WebSocketClientOptions = {};
@@ -400,6 +413,7 @@ export class TcpTransport implements Transport, TcpServerParent
     private announce_period = 55000;
     private server: TcpServer | null = null;
 
+    /** @param node The node the transport belongs to. Register the transport with it too */
     constructor(public node: RobotRaconteurNode) {}
 
     canConnectService(url: string): boolean
@@ -441,11 +455,13 @@ export class TcpTransport implements Transport, TcpServerParent
         return c;
     }
 
+    /** @internal Called when a connection closes */
     removeConnection(c: StreamConnection): void
     {
         this.connections.delete(c);
     }
 
+    /** @internal Called when the server accepts a connection */
     addServerConnection(c: StreamConnection): void
     {
         this.connections.add(c);
@@ -718,6 +734,7 @@ export class TcpTransport implements Transport, TcpServerParent
         this.discovery = d;
     }
 
+    /** Stop listening for node announcements */
     disableNodeDiscoveryListening(): void
     {
         this.discovery?.close();
@@ -746,6 +763,7 @@ export class TcpTransport implements Transport, TcpServerParent
         await a.start();
     }
 
+    /** Stop announcing this node */
     disableNodeAnnounce(): void
     {
         removeServicesChangedListener(this.node, this.announce_now);
@@ -759,6 +777,7 @@ export class TcpTransport implements Transport, TcpServerParent
         return this.announce_period;
     }
 
+    /** Milliseconds between announcements, 55000 by default as in Core */
     set nodeAnnouncePeriod(ms: number)
     {
         this.announce_period = ms;

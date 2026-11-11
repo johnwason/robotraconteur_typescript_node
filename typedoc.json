@@ -1,0 +1,48 @@
+{
+    "$schema": "https://typedoc.org/schema.json",
+    "entryPoints": [
+        "src/index.ts"
+    ],
+    "out": "docs-site",
+    "name": "robotraconteur-node",
+    "excludePrivate": true,
+    "excludeProtected": true,
+    "excludeInternal": true,
+    "validation": {
+        "notExported": true,
+        "invalidLink": true,
+        "notDocumented": true
+    },
+    "intentionallyNotExported": [
+        "TcpServerParent",
+        "DiscoverySubscriber"
+    ],
+    "treatWarningsAsErrors": true,
+    "readme": "README.md",
+    "projectDocuments": [
+        "docs/guide/getting-started.md",
+        "docs/guide/tls.md",
+        "docs/guide/discovery.md",
+        "docs/guide/services.md",
+        "docs/guide/security.md",
+        "docs/guide/web-servers.md"
+    ],
+    "navigation": {
+        "includeCategories": false,
+        "includeGroups": true
+    },
+    "highlightLanguages": [
+        "bash",
+        "console",
+        "css",
+        "html",
+        "javascript",
+        "json",
+        "jsonc",
+        "json5",
+        "yaml",
+        "tsx",
+        "typescript",
+        "nginx"
+    ]
+}

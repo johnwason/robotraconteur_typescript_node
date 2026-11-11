@@ -44,9 +44,13 @@ const MULTICAST_GROUPS: [number, string][] = [
 /** The unverified contents of a node announcement packet */
 export interface NodeAnnouncement
 {
+    /** The announcing node */
     nodeID: NodeID;
+    /** Its name, which may be empty */
     nodeName: string;
+    /** The URL of its service index */
     url: string;
+    /** Changes when the node's services change. Empty if it did not send one */
     serviceStateNonce: string;
 }
 

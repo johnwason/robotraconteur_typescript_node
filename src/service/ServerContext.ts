@@ -50,6 +50,7 @@ export function parseServicePath(path: string): { name: string; index?: string }
     });
 }
 
+/** Called when a client connects or disconnects, with its endpoint number, or when the service closes */
 export type ServerServiceListener = (context: ServerContext, event: "ClientConnected" | "ClientDisconnected" | "ServiceClosed", endpoint?: number) => void;
 
 /** One connected client of a service */
@@ -70,6 +71,7 @@ export class ServerEndpoint implements Endpoint
     }
 
     localEndpoint = 0;
+    /** When the client last sent a message, in milliseconds since the epoch. Clients silent for the node's endpointInactivityTimeout are disconnected */
     lastMessageReceived = Date.now();
     /** The user the client has logged in as */
     authenticatedUser: AuthenticatedUser | null = null;
@@ -77,6 +79,15 @@ export class ServerEndpoint implements Endpoint
     private request_number = 0;
     private pending = new Map<number, { resolve: (e: MessageEntry) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 
+    /**
+     * @internal Created when a client connects
+     *
+     * @param context The service the client connected to
+     * @param remoteEndpoint The client's endpoint number in its own node
+     * @param remoteNodeID The client's node
+     * @param remoteNodeName The name of the client's node
+     * @param connection The transport connection the client uses
+     */
     constructor(readonly context: ServerContext, readonly remoteEndpoint: number, readonly remoteNodeID: NodeID, readonly remoteNodeName: string, readonly connection: ServerTransportConnection) {}
 
     messageReceived(m: Message): void
@@ -105,6 +116,7 @@ export class ServerEndpoint implements Endpoint
         this.authenticatedUser = await this.context.authenticateUser(username, credentials, this.connection);
     }
 
+    /** Log the client out */
     logoutUser(): void
     {
         this.authenticatedUser = null;
@@ -215,6 +227,7 @@ export class ServerContext
 {
     /** Attributes reported to clients, such as for discovery filters. Values must be VarValue */
     readonly attributes = new Map<string, VarValue>();
+    /** @internal The service definitions of the node, for packing values */
     readonly types: TypeContext;
 
     private skels = new Map<string, ServiceSkel>();
@@ -227,6 +240,14 @@ export class ServerContext
     private cleanup_timer: ReturnType<typeof setInterval>;
     private closed = false;
 
+    /**
+     * @internal Created by RobotRaconteurNode.registerService
+     *
+     * @param node The node serving the service
+     * @param serviceName The name clients connect to
+     * @param rootObjectType The qualified type of the root object
+     * @param securityPolicy How clients log in, if they must
+     */
     constructor(readonly node: RobotRaconteurNode, readonly serviceName: string, readonly rootObjectType: string, root: ServiceObject, private on_close: () => void, readonly securityPolicy: ServiceSecurityPolicy | null = null)
     {
         this.types = new TypeContext(node.serviceTypes);
@@ -281,6 +302,7 @@ export class ServerContext
         return [...this.extra_imports];
     }
 
+    /** Send clients a registered service definition the root object does not import, for types such as those of varvalue values */
     addExtraImport(name: string): void
     {
         if (!this.node.serviceTypes.has(name)) throw serviceError(MessageErrorType.ServiceError, "ServiceError", `Service type ${name} is not registered`);
@@ -288,6 +310,7 @@ export class ServerContext
         this.extra_imports.push(name);
     }
 
+    /** Stop sending a definition added with addExtraImport. Returns false if it was not added */
     removeExtraImport(name: string): boolean
     {
         const i = this.extra_imports.indexOf(name);
@@ -308,11 +331,13 @@ export class ServerContext
         return [...this.clients.keys()];
     }
 
+    /** Call a function when clients connect or disconnect, or the service closes */
     addServerServiceListener(listener: ServerServiceListener): void
     {
         this.listeners.add(listener);
     }
 
+    /** Stop calling a function added with addServerServiceListener */
     removeServerServiceListener(listener: ServerServiceListener): void
     {
         this.listeners.delete(listener);
@@ -339,7 +364,7 @@ export class ServerContext
         return packElement(name, VARVALUE_MAP, this.attributes, NO_SCOPE, this.types);
     }
 
-    /** The object at a service path, asking each objref for its object the first time it is used */
+    /** @internal The object at a service path, asking each objref for its object the first time it is used */
     async getObjectSkel(path: string): Promise<ServiceSkel>
     {
         const existing = this.skels.get(path);
@@ -384,6 +409,7 @@ export class ServerContext
         return skel;
     }
 
+    /** The qualified type of the object at a service path */
     async getObjectType(path: string): Promise<string>
     {
         return (await this.getObjectSkel(path)).objectType;
@@ -417,6 +443,7 @@ export class ServerContext
         return def?.objects.find((o) => o.name === object_type.substring(i + 1))?.implements ?? [];
     }
 
+    /** @internal A message from a client */
     async messageReceived(m: Message, ep: ServerEndpoint): Promise<void>
     {
         const ret: MessageEntry[] = [];
@@ -644,6 +671,7 @@ export class ServerContext
         }
     }
 
+    /** @internal A client connected */
     addClient(ep: ServerEndpoint): void
     {
         if (this.closed) throw serviceError(MessageErrorType.ServiceNotFound, "ServiceNotFound", "Service not found");
@@ -652,6 +680,7 @@ export class ServerContext
         this.notify("ClientConnected", ep.localEndpoint);
     }
 
+    /** Disconnect a client, closing its wires, pipes, and generators and releasing its locks */
     removeClient(ep: ServerEndpoint): void
     {
         if (!this.clients.delete(ep.localEndpoint)) return;
@@ -723,6 +752,7 @@ export class ServerContext
         this.on_close();
     }
 
+    /** True once the service has been closed */
     get isClosed(): boolean
     {
         return this.closed;

@@ -25,12 +25,17 @@ export interface ServiceSubscriptionManagerDetails
 {
     /** Identifies the subscription in the manager */
     name: string;
+    /** Connect by URL or by service type. Chosen from what is given if not set */
     connectionMethod?: ServiceSubscriptionManagerConnectionMethod;
+    /** The URLs to connect to */
     urls?: string[];
+    /** The username for the URLs */
     urlUsername?: string;
+    /** The credentials for the URLs */
     urlCredentials?: Map<string, unknown> | Record<string, unknown>;
     /** The service types to find using discovery */
     serviceTypes?: string[];
+    /** Limits which discovered services are used */
     filter?: ServiceSubscriptionFilter;
     /** Whether to connect. Defaults to true */
     enabled?: boolean;
@@ -224,11 +229,13 @@ export class ServiceSubscriptionManager
         return this.subscriptions.get(name)?.details.enabled ?? false;
     }
 
+    /** The names of the subscriptions */
     getSubscriptionNames(): string[]
     {
         return [...this.subscriptions.keys()];
     }
 
+    /** The details of each subscription, as given to addSubscription or updateSubscription */
     getSubscriptionDetails(): ServiceSubscriptionManagerDetails[]
     {
         return [...this.subscriptions.values()].map((m) => ({ ...m.details }));

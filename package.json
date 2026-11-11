@@ -35,7 +35,8 @@
         "test:unit": "npm run build:test && node --test \"dist-test/unit/*.test.mjs\"",
         "test:integration": "npm run build:test && node --test --test-concurrency=1 \"dist-test/integration/*.test.mjs\"",
         "test:extra": "npm run build:test && node --test \"dist-test/extra/*.test.mjs\"",
-        "test": "npm run build:test && node --test --test-concurrency=1 \"dist-test/unit/*.test.mjs\" \"dist-test/integration/*.test.mjs\""
+        "test": "npm run build:test && node --test --test-concurrency=1 \"dist-test/unit/*.test.mjs\" \"dist-test/integration/*.test.mjs\"",
+        "docs": "npm run build && typedoc"
     },
     "dependencies": {
         "ws": "8.22.2"
@@ -52,6 +53,7 @@
         "@types/node": "22.10.2",
         "@types/ws": "8.18.2",
         "esbuild": "0.24.2",
+        "typedoc": "0.28.20",
         "typescript": "5.7.2"
     }
 }

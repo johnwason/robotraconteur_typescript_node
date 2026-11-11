@@ -25,6 +25,22 @@ import type { ServiceSkel } from "./ServiceSkel.js";
 
 const TIMESPEC = "RobotRaconteur.TimeSpec";
 
+/** A value of a wire with the time the sender gave it */
+export interface WireValueOf<T>
+{
+    /** The value */
+    value: T;
+    /** When the sender sent the value, by its own clock */
+    timestamp: TimeSpec;
+}
+
+/** A value a WireUnicastReceiver received, with the client that sent it */
+export interface WireValueFrom<T> extends WireValueOf<T>
+{
+    /** The local endpoint number of the client */
+    endpoint: number;
+}
+
 export function memberError(code: MessageErrorType, name: string, message: string): RobotRaconteurError
 {
     return new RobotRaconteurError(code, "RobotRaconteur." + name, message);
@@ -115,12 +131,17 @@ export class WireServer<T = unknown>
     readonly direction: MemberDirection;
     private connections = new Map<number, WireConnection<T>>();
 
-    /** @internal */
+    /**
+     * @internal Created by the node for each wire member
+     *
+     * @param member The wire member's definition
+     */
     constructor(private skel: ServiceSkel, readonly member: MemberDefinition)
     {
         this.direction = directionOf(member);
     }
 
+    /** The name of the wire member */
     get memberName(): string
     {
         return this.member.name;
@@ -293,17 +314,23 @@ export class WireConnection<T = unknown>
     outValueLifespan = -1;
     /** Drop values the client sends */
     ignoreInValue = false;
+    /** True once the connection has closed */
     closed = false;
 
-    private in_value: { value: T; timestamp: TimeSpec } | null = null;
+    private in_value: WireValueOf<T> | null = null;
     private in_local = 0;
-    private out_value: { value: T; timestamp: TimeSpec } | null = null;
+    private out_value: WireValueOf<T> | null = null;
     private out_local = 0;
     private last_send: TimeSpec = { seconds: 0n, nanoseconds: 0 };
     private in_waiters = new Waiters();
     private out_waiters = new Waiters();
 
-    /** @internal */
+    /**
+     * @internal Created when a client connects
+     *
+     * @param endpoint The local endpoint number of the client
+     * @param direction Which way values go, as the service sees it
+     */
     constructor(private wire: WireServer<T>, readonly endpoint: number, readonly direction: MemberDirection) {}
 
     private expired(local: number, lifespan: number): boolean
@@ -311,11 +338,13 @@ export class WireConnection<T = unknown>
         return lifespan >= 0 && Date.now() - local > lifespan;
     }
 
+    /** Whether a value has been received and has not expired */
     get inValueValid(): boolean
     {
         return this.in_value !== null && !this.expired(this.in_local, this.inValueLifespan);
     }
 
+    /** Whether a value has been sent and has not expired */
     get outValueValid(): boolean
     {
         return this.out_value !== null && !this.expired(this.out_local, this.outValueLifespan);
@@ -341,7 +370,8 @@ export class WireConnection<T = unknown>
         return this.in_value!.value;
     }
 
-    tryGetInValue(): { value: T; timestamp: TimeSpec } | null
+    /** The last value received with its timestamp, or null if none has been received or it has expired */
+    tryGetInValue(): WireValueOf<T> | null
     {
         return this.inValueValid ? this.in_value : null;
     }
@@ -374,7 +404,8 @@ export class WireConnection<T = unknown>
         this.out_waiters.notifyAll();
     }
 
-    tryGetOutValue(): { value: T; timestamp: TimeSpec } | null
+    /** The last value sent with its timestamp, or null if none has been sent or it has expired */
+    tryGetOutValue(): WireValueOf<T> | null
     {
         return this.outValueValid ? this.out_value : null;
     }
@@ -386,6 +417,7 @@ export class WireConnection<T = unknown>
         return this.inValueValid;
     }
 
+    /** Wait until a value has been sent, for up to timeout milliseconds or indefinitely if negative. Resolves with whether it is valid */
     async waitOutValueValid(timeout = -1): Promise<boolean>
     {
         if (!this.outValueValid && !this.closed) await this.out_waiters.wait(timeout);
@@ -447,6 +479,7 @@ export class WireBroadcaster<T = unknown>
     private out_local = 0;
     private connections = new Set<WireConnection<T>>();
 
+    /** @param wire The wire member, from the service object. The broadcaster sets its callbacks */
     constructor(readonly wire: WireServer<T>)
     {
         if (!(wire instanceof WireServer)) throw memberError(MessageErrorType.InvalidArgument, "InvalidArgument", "Wire must be the WireServer of a service object");
@@ -485,6 +518,7 @@ export class WireBroadcaster<T = unknown>
         return this.connections.size;
     }
 
+    /** The last value sent. Throws ValueNotSet if none has been sent or it has expired */
     get outValue(): T
     {
         if (!this.valid) throw valueNotSet();
@@ -527,10 +561,11 @@ export class WireUnicastReceiver<T = unknown>
     /** Milliseconds the value stays valid. -1 for always */
     inValueLifespan = -1;
 
-    private in_value: { value: T; timestamp: TimeSpec; endpoint: number } | null = null;
+    private in_value: WireValueFrom<T> | null = null;
     private in_local = 0;
     private active: WireConnection<T> | null = null;
 
+    /** @param wire The wire member, from the service object. The receiver sets its callbacks */
     constructor(readonly wire: WireServer<T>)
     {
         if (!(wire instanceof WireServer)) throw memberError(MessageErrorType.InvalidArgument, "InvalidArgument", "Wire must be the WireServer of a service object");
@@ -578,7 +613,7 @@ export class WireUnicastReceiver<T = unknown>
     }
 
     /** The last value received with its timestamp and the client's endpoint, or null */
-    tryGetInValue(): { value: T; timestamp: TimeSpec; endpoint: number } | null
+    tryGetInValue(): WireValueFrom<T> | null
     {
         return this.valid ? this.in_value : null;
     }

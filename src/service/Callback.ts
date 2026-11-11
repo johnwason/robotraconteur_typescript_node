@@ -24,7 +24,11 @@ import type { ServiceSkel } from "./ServiceSkel.js";
  */
 export class Callback<R = unknown>
 {
-    /** @internal */
+    /**
+     * @internal Created by the node for each callback member
+     *
+     * @param member The callback member's definition
+     */
     constructor(private skel: ServiceSkel, readonly member: MemberDefinition) {}
 
     /**

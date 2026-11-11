@@ -21,19 +21,34 @@ import type { TcpTransport } from "../transports/TcpTransport.js";
 import { filterService, ServiceInfo2Subscription } from "./Subscriptions.js";
 import type { DiscoverySubscriber, ServiceSubscriptionFilter } from "./Subscriptions.js";
 
+/** A URL a node announced */
+export interface NodeDiscoveryURL
+{
+    /** The URL of the node's service index */
+    url: string;
+    /** When the node last announced the URL, in milliseconds since the epoch */
+    lastAnnounceTime: number;
+}
+
 /** A node seen on the network. The information has not been verified */
 export interface NodeDiscoveryInfo
 {
+    /** The node's ID */
     nodeID: NodeID;
+    /** The node's name, which may be empty */
     nodeName: string;
-    urls: { url: string; lastAnnounceTime: number }[];
+    /** The URLs the node announced */
+    urls: NodeDiscoveryURL[];
+    /** Changes when the node's services change, so they are listed again */
     serviceStateNonce: string;
 }
 
 /** A node found using discovery */
 export interface NodeInfo2
 {
+    /** The node's ID */
     nodeID: NodeID;
+    /** The node's name, which may be empty */
     nodeName: string;
     /** Candidate URLs. Add a service parameter to connect to a service */
     connectionURLs: string[];
@@ -42,16 +57,23 @@ export interface NodeInfo2
 /** A service found using discovery */
 export interface ServiceInfo2
 {
+    /** The service name */
     name: string;
+    /** The qualified type of the root object */
     rootObjectType: string;
+    /** The types the root object implements */
     rootObjectImplements: string[];
     /** Candidate URLs, which can be passed to connectService */
     connectionURLs: string[];
+    /** The attributes the service reports, such as for filters */
     attributes: Map<string, unknown>;
+    /** The ID of the service's node */
     nodeID: NodeID;
+    /** The name of the service's node */
     nodeName: string;
 }
 
+/** Options for new NodeDiscovery */
 export interface NodeDiscoveryOptions
 {
     /** Values of IPNodeDiscoveryFlags. Defaults to IPv6 link-local multicast, as in Core */
@@ -69,7 +91,7 @@ export interface NodeDiscoveryOptions
     nodeExpiration?: number;
 }
 
-/** What is known about a detected node */
+/** @internal What is known about a detected node */
 export interface NodeStorage
 {
     info: NodeDiscoveryInfo;
@@ -81,7 +103,9 @@ export interface NodeStorage
     retry_count: number;
 }
 
+/** Called when discovery first sees a node */
 export type NodeDetectedHandler = (info: NodeDiscoveryInfo) => void;
+/** Called when a node has not been heard from for the node expiration time */
 export type NodeLostHandler = (info: NodeDiscoveryInfo) => void;
 
 const MAX_NODES = 1000;
@@ -138,8 +162,7 @@ function sleepInBackground(ms: number): Promise<void>
     return new Promise((resolve) => setTimeout(resolve, ms).unref());
 }
 
-/** Finds nodes and services on the network. Node.js only, as browsers cannot use UDP */
-/** Connects a subscription to the services found by discovery */
+/** @internal Connects a subscription to the services found by discovery */
 export interface ServiceTypeSource
 {
     start(serviceTypes: string[], filter?: ServiceSubscriptionFilter): void;
@@ -148,6 +171,11 @@ export interface ServiceTypeSource
     stop(): void;
 }
 
+/**
+ * Finds Robot Raconteur nodes and their services on the local network, from the UDP announcements
+ * of nodes, as Core's discovery. Start it, then find services by type, or subscribe to them.
+ * Node.js only, as browsers cannot use UDP.
+ */
 export class NodeDiscovery
 {
     private nodes = new Map<string, NodeStorage>();
@@ -163,6 +191,11 @@ export class NodeDiscovery
     private readonly service_timeout: number;
     private readonly node_expiration: number;
 
+    /**
+     * @param node The node that connects to the services found
+     * @param transport The node's TCP transport, which listens for announcements
+     * @param options Which addresses and URL schemes to use, and how long to wait
+     */
     constructor(readonly node: RobotRaconteurNode, private transport: TcpTransport, options: NodeDiscoveryOptions = {})
     {
         this.flags = options.flags ?? IPNodeDiscoveryFlags.LinkLocal;
@@ -199,21 +232,25 @@ export class NodeDiscovery
         return [...this.nodes.values()].map((n) => n.info);
     }
 
+    /** Call a function when a node is first seen */
     addNodeDetectedListener(handler: NodeDetectedHandler): void
     {
         this.detected_listeners.add(handler);
     }
 
+    /** Stop calling a function added with addNodeDetectedListener */
     removeNodeDetectedListener(handler: NodeDetectedHandler): void
     {
         this.detected_listeners.delete(handler);
     }
 
+    /** Call a function when a node is lost */
     addNodeLostListener(handler: NodeLostHandler): void
     {
         this.lost_listeners.add(handler);
     }
 
+    /** Stop calling a function added with addNodeLostListener */
     removeNodeLostListener(handler: NodeLostHandler): void
     {
         this.lost_listeners.delete(handler);
@@ -384,7 +421,7 @@ export class NodeDiscovery
     }
 
     /**
-     * Supply an existing subscription with the services found by discovery. Used by
+     * @internal Supply an existing subscription with the services found by discovery. Used by
      * subscribeServiceByType and ServiceSubscriptionManager.
      */
     serviceTypeSource(subscription: ServiceSubscription): ServiceTypeSource
@@ -504,6 +541,7 @@ export class NodeDiscovery
         return urls.length > 0 ? [{ nodeID: info.nodeID, nodeName: info.nodeName, connectionURLs: urls }] : [];
     }
 
+    /** Find a node by its ID, waiting for nodes to answer a discovery request */
     async findNodeByID(id: NodeID, schemes = this.schemes): Promise<NodeInfo2[]>
     {
         await this.updateDetectedNodes();
@@ -511,6 +549,7 @@ export class NodeDiscovery
         return storage ? this.nodeInfo(storage.info, schemes) : [];
     }
 
+    /** Find nodes by name, waiting for nodes to answer a discovery request */
     async findNodeByName(name: string, schemes = this.schemes): Promise<NodeInfo2[]>
     {
         await this.updateDetectedNodes();

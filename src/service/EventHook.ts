@@ -20,11 +20,13 @@ export class EventHook<T extends unknown[] = any[]>
 {
     private handlers = new Set<(...args: T) => unknown>();
 
+    /** Call a function each time the event fires */
     addHandler(handler: (...args: T) => unknown): void
     {
         this.handlers.add(handler);
     }
 
+    /** Stop calling a function added with addHandler */
     removeHandler(handler: (...args: T) => unknown): void
     {
         this.handlers.delete(handler);
