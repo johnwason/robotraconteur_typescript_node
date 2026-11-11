@@ -15,6 +15,7 @@
 import { RobotRaconteurError } from "robotraconteur";
 import type { EntryDefinition, MemberDefinition, MemberKind, ServiceDefinition, TypeDefinition } from "robotraconteur";
 import { DataTypes, getElement, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, packElement, unpackElement } from "robotraconteur/internal";
+import { Callback } from "./Callback.js";
 import { EventHook } from "./EventHook.js";
 import { GENERATOR_CLOSED_TIMEOUT, GENERATOR_IDLE_TIMEOUT, toServiceGenerator } from "./Generators.js";
 import type { ServiceGenerator } from "./Generators.js";
@@ -84,11 +85,21 @@ export class ServiceSkel
         this.members = new Map(entry.members.map((m) => [m.name, m]));
     }
 
-    /** Connect the events of the object and let it initialize, as Python's RRServiceObjectInit */
+    /**
+     * Connect the events of the object, put a Callback on each callback member, and let it
+     * initialize, as Python's RRServiceObjectInit
+     */
     init(): void
     {
         for (const m of this.entry.members)
         {
+            if (m.kind === "callback")
+            {
+                const cb = this.obj[m.name] as unknown;
+                if (cb === undefined || cb === null) this.obj[m.name] = new Callback(this, m);
+                else if (!(cb instanceof Callback)) throw serviceError(MessageErrorType.InvalidArgument, "InvalidArgument", `Callback ${m.name} of ${this.objectType} must not be set by the object`);
+                continue;
+            }
             if (m.kind !== "event") continue;
             let hook = this.obj[m.name] as unknown;
             if (hook === undefined || hook === null)
@@ -129,12 +140,12 @@ export class ServiceSkel
         return m;
     }
 
-    private pack(name: string, t: TypeDefinition, v: unknown): MessageElement
+    pack(name: string, t: TypeDefinition, v: unknown): MessageElement
     {
         return packElement(name, t, v, this.def, this.context.types);
     }
 
-    private unpack(e: MessageElement, t: TypeDefinition): unknown
+    unpack(e: MessageElement, t: TypeDefinition): unknown
     {
         return unpackElement(e, t, this.def, this.context.types);
     }

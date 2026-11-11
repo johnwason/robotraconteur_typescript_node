@@ -16,7 +16,7 @@
 
 import { RobotRaconteurError, VarValue } from "robotraconteur";
 import { EventHook, ServerEndpoint } from "../../src/index.js";
-import type { ServerContext } from "../../src/index.js";
+import type { Callback, ServerContext } from "../../src/index.js";
 
 export const TEST_SERVICE_DEF = `## A service for testing robotraconteur-node services
 service experimental.ts_service_test
@@ -60,6 +60,9 @@ object testroot
     function int32{generator} count_to(int32 n)
     function double{generator} scale(double factor, double{generator} values)
     function int32{generator} not_a_generator()
+    callback double cb_add(double a, double b)
+    function double call_cb_add(double a, double b)
+    function void call_cb_endpoint(uint32 endpoint)
     event ev1(string message, double value)
     objref sub o1
     objref sub{int32} o2
@@ -110,6 +113,7 @@ export class TestRoot
     v1: VarValue | null = new VarValue("a string", "string");
     smap = new Map([["a", "x"]]);
     ev1!: EventHook<[string, number]>;
+    cb_add!: Callback<number>;
     w1_value = 0;
     context: ServerContext | null = null;
     private o1 = new Sub("o1");
@@ -201,6 +205,16 @@ export class TestRoot
     not_a_generator(): number
     {
         return 5;
+    }
+
+    call_cb_add(a: number, b: number): Promise<number>
+    {
+        return this.cb_add.getClientFunction(ServerEndpoint.current!)(a, b);
+    }
+
+    async call_cb_endpoint(endpoint: number): Promise<void>
+    {
+        await this.cb_add.getClientFunction(endpoint)(1, 2);
     }
 
     get_o1(): Sub

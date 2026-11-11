@@ -15,16 +15,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // Port of Core's Python test service, test/python/RobotRaconteurTest/ServiceTest.py, in the same
-// order. Values come from Core's test vector blob, as in Core. Pipes, wires, callbacks, and
-// memories are not ported yet, because robotraconteur-node services do not support them yet.
+// order. Values come from Core's test vector blob, as in Core. Pipes, wires, and memories are not
+// ported yet, because robotraconteur-node services do not support them yet.
 
 import assert from "node:assert/strict";
 import { RobotRaconteurError, VarValue } from "robotraconteur";
 import { MessageErrorType } from "robotraconteur/internal";
 import { getTestVector } from "@shared/test/common/TestVectors.js";
 import { ca, cae, md } from "@shared/test/common/TestUtil.js";
-import { EventHook } from "../../src/index.js";
-import type { ServerContext } from "../../src/index.js";
+import { EventHook, ServerEndpoint } from "../../src/index.js";
+import type { Callback, ServerContext } from "../../src/index.js";
 
 const T1 = "com.robotraconteur.testing.TestService1";
 const T2 = "com.robotraconteur.testing.TestService2";
@@ -56,6 +56,13 @@ export class testroot_impl
 
     ev1 = new EventHook<[]>();
     ev2 = new EventHook<[number, unknown]>();
+
+    // Set by the node, as in Python
+    cb1!: Callback;
+    cb2!: Callback;
+    cb3!: Callback<number>;
+    cb_meaning_of_life!: Callback<number>;
+    cb_errtest!: Callback;
 
     private context: ServerContext | null = null;
     private service_path = "";
@@ -768,6 +775,18 @@ export class testroot_impl
         else assert.fail("Unknown op number");
     }
 
+    // Callbacks
+
+    async test_callbacks(): Promise<void>
+    {
+        const ep = ServerEndpoint.current!;
+        await this.cb1.getClientFunction(ep)();
+        await this.cb2.getClientFunction(ep)(739.2, 0.392);
+        const res = await this.cb3.getClientFunction(ep)(34, 45);
+        assert.equal(res, 34 + 45 + 3.14);
+        assert.equal(await this.cb_meaning_of_life.getClientFunction(ep)(), 42);
+        await assert.rejects(this.cb_errtest.getClientFunction(ep)());
+    }
 }
 
 function cached<K, V>(m: Map<K, V>, key: K, create: () => V): V

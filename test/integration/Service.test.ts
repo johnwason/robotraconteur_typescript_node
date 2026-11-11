@@ -176,6 +176,19 @@ describe("services", () =>
                 await assert.rejects(c.callGenerator("not_a_generator"), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidOperation");
             });
 
+            test("callbacks call the function set by the client", async () =>
+            {
+                await assert.rejects(c.callFunction("call_cb_add", [1, 2]), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidOperation");
+                c.setCallback("cb_add", async (a: number, b: number) => a + b + 0.5);
+                assert.equal(await c.callFunction("call_cb_add", [1, 2]), 3.5);
+                c.setCallback("cb_add", () =>
+                {
+                    throw new RobotRaconteurError(18, "RobotRaconteur.InvalidArgument", "no thanks");
+                });
+                await assert.rejects(c.callFunction("call_cb_add", [1, 2]), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidArgument" && e.message === "no thanks");
+                await assert.rejects(c.callFunction("call_cb_endpoint", [987654]), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidArgument");
+            });
+
             test("a generator can only be used by the client that created it", async () =>
             {
                 const g = await c.callGenerator<number>("count_to", [3]);

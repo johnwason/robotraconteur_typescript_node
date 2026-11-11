@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { RobotRaconteurError } from "robotraconteur";
 import type { Endpoint, NodeID, VarValue, RobotRaconteurNode, ServiceDefinition, TypeDefinition } from "robotraconteur";
 import type { ServerTransportConnection } from "../transports/StreamConnections.js";
 import { DataTypes, errorToEntry, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, packElement, TypeContext } from "robotraconteur/internal";
@@ -62,6 +63,8 @@ export class ServerEndpoint implements Endpoint
     localEndpoint = 0;
     lastMessageReceived = Date.now();
     private message_number = 0;
+    private request_number = 0;
+    private pending = new Map<number, { resolve: (e: MessageEntry) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 
     constructor(readonly context: ServerContext, readonly remoteEndpoint: number, readonly remoteNodeID: NodeID, readonly remoteNodeName: string, readonly connection: ServerTransportConnection) {}
 
@@ -103,6 +106,58 @@ export class ServerEndpoint implements Endpoint
         h.messageID = this.message_number;
         this.message_number = (this.message_number + 1) & 0xffff;
         this.connection.sendMessage(m);
+    }
+
+    /**
+     * Send a request to the client and wait for its response, as for a callback. Fails after
+     * timeout milliseconds, or when the client disconnects.
+     */
+    request(e: MessageEntry, timeout = this.context.node.requestTimeout): Promise<MessageEntry>
+    {
+        this.request_number = (this.request_number % 0xffffffff) + 1;
+        const id = this.request_number;
+        e.requestID = id;
+        return new Promise<MessageEntry>((resolve, reject) =>
+        {
+            const timer = setTimeout(() =>
+            {
+                this.pending.delete(id);
+                reject(new RobotRaconteurError(MessageErrorType.RequestTimeout, "RobotRaconteur.RequestTimeout", "Request timed out"));
+            }, timeout);
+            this.pending.set(id, { resolve, reject, timer });
+            try
+            {
+                this.send([e]);
+            }
+            catch (err)
+            {
+                clearTimeout(timer);
+                this.pending.delete(id);
+                reject(err as Error);
+            }
+        });
+    }
+
+    /** A response from the client to a request sent with request() */
+    responseReceived(e: MessageEntry): void
+    {
+        const p = this.pending.get(e.requestID);
+        if (!p) return;
+        this.pending.delete(e.requestID);
+        clearTimeout(p.timer);
+        p.resolve(e);
+    }
+
+    /** Fail the requests still waiting for the client, which has disconnected */
+    failPendingRequests(): void
+    {
+        const pending = [...this.pending.values()];
+        this.pending.clear();
+        for (const p of pending)
+        {
+            clearTimeout(p.timer);
+            p.reject(new RobotRaconteurError(MessageErrorType.ConnectionError, "RobotRaconteur.ConnectionError", "Client disconnected"));
+        }
     }
 
     /** Send entries, ignoring a closed connection */
@@ -291,8 +346,12 @@ export class ServerContext
 
     private async processMessageEntry(m: MessageEntry, ep: ServerEndpoint): Promise<MessageEntry | null>
     {
-        // Answers to requests the service sent, which are not used yet
-        if (m.entryType % 2 === 0) return null;
+        // Responses to requests the service sent, such as callbacks
+        if (m.entryType % 2 === 0)
+        {
+            ep.responseReceived(m);
+            return null;
+        }
 
         let ret: MessageEntry | null = null;
         try
@@ -379,6 +438,7 @@ export class ServerContext
     removeClient(ep: ServerEndpoint): void
     {
         if (!this.clients.delete(ep.localEndpoint)) return;
+        ep.failPendingRequests();
         ep.connection.detachEndpoint(ep);
         this.node.deleteEndpoint(ep);
         this.notify("ClientDisconnected", ep.localEndpoint);
