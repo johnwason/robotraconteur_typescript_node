@@ -104,6 +104,15 @@ export class TcpClientConnection extends StreamConnection
 /** A transport connection accepted from a client. Several service endpoints may use it */
 export interface ServerTransportConnection extends ITransportConnection
 {
+    /**
+     * The URL of the local end of the connection, such as rr+tcp://192.168.1.2:22222/, which the
+     * service index reports for the node's services. Empty if the transport has none
+     */
+    readonly connectionUrl: string;
+    /** True once the connection uses TLS */
+    readonly secure: boolean;
+    /** The client's node ID, verified by its TLS certificate, or null if it has not been verified */
+    readonly securePeerIdentity: NodeID | null;
     /** Notify the endpoint when the connection closes */
     attachEndpoint(e: Endpoint): void;
     detachEndpoint(e: Endpoint): void;
@@ -122,9 +131,41 @@ export function isSpecialRequest(m: Message): boolean
     return true;
 }
 
+/**
+ * Switches an accepted connection to TLS as a server, after its STARTTLS reply has been written.
+ * Returns the socket to use from then on. onSecure is called with the client's verified node ID,
+ * or null if the client did not ask to be checked, and onFailed if the handshake or check fails.
+ * Throws, before changing anything, if TLS cannot be started.
+ */
+export type ServerTlsStarter = (events: SocketEvents, mutualAuth: boolean, clientNodeID: NodeID, onSecure: (peer: NodeID | null) => void, onFailed: (e: Error) => void) => SocketAdapter;
+
 /** A connection accepted by a server, which answers the client's stream operations and requests to the node */
 export class ServerStreamConnection extends StreamConnection implements ServerTransportConnection
 {
+    /** The scheme and host:port of the local end, which connectionUrl reports */
+    urlScheme = "rr+tcp";
+    urlHost = "";
+    /** Starts TLS when the client sends STARTTLS. Null if the connection cannot use TLS */
+    startTls: ServerTlsStarter | null = null;
+    /** Close connections that do not start TLS before anything else, as Core's RequireTls */
+    requireTls = false;
+    secure = false;
+    private tls_pending = false;
+    /** The node ID in the client's verified certificate */
+    private tls_peer: NodeID | null = null;
+
+    /** The client's node ID, if its certificate has been verified and is for the node it connected as */
+    get securePeerIdentity(): NodeID | null
+    {
+        return this.tls_peer && this.tls_peer.equals(this.remoteNodeID) ? this.tls_peer : null;
+    }
+
+    get connectionUrl(): string
+    {
+        if (this.urlHost === "") return "";
+        return `${this.secure ? this.urlScheme.replace(/^rr\+/, "rrs+") : this.urlScheme}://${this.urlHost}/`;
+    }
+
     /** Set once the client has created the connection */
     private created = false;
     private handshake_timer: ReturnType<typeof setTimeout> | undefined;
@@ -160,7 +201,7 @@ export class ServerStreamConnection extends StreamConnection implements ServerTr
      */
     protected override rejectMessage(m: Message): boolean
     {
-        if (!this.created)
+        if (!this.created || (this.requireTls && !this.secure))
         {
             this.close();
             return true;
@@ -215,7 +256,8 @@ export class ServerStreamConnection extends StreamConnection implements ServerTr
                 this.createConnectionForClient(m, ret);
                 break;
             case "STARTTLS":
-                throw connectionError("This service does not support TLS");
+                if (this.serverStartTls(m, r, ret)) return;
+                break;
             default:
                 throw new RobotRaconteurError(MessageErrorType.ProtocolError, "RobotRaconteur.ProtocolError", "Unknown stream operation");
             }
@@ -236,8 +278,38 @@ export class ServerStreamConnection extends StreamConnection implements ServerTr
     }
 
     /** Accept CreateConnection for this node, agreeing on the capabilities both sides support, as Core does */
+    /**
+     * Answer STARTTLS and switch to TLS, as Core does. The reply is written before the switch, and
+     * the TLS socket takes the incoming data from then on. Returns true once the reply is sent
+     */
+    private serverStartTls(m: Message, r: Message, ret: MessageEntry): boolean
+    {
+        const node = this.parent.node;
+        const h = m.header;
+        const for_node = (h.receiverNodeID.isAnyNode || h.receiverNodeID.equals(node.nodeID)) && (h.receiverNodeName === "" || h.receiverNodeName === node.nodeName);
+        if (!for_node) throw new RobotRaconteurError(MessageErrorType.NodeNotFound, "RobotRaconteur.NodeNotFound", "Node not found");
+        if (!this.startTls || this.created) throw connectionError("This service does not support TLS on this connection");
+        if (this.secure || this.tls_pending) throw connectionError("TLS already started");
+
+        const mutual = findElement(m.entries[0]!.elements, "mutualauth")?.castString() === "true";
+        const socket = this.startTls(this.events(), mutual, h.senderNodeID, (peer) =>
+        {
+            this.tls_pending = false;
+            this.secure = true;
+            this.tls_peer = peer;
+        }, () => this.close());
+        this.tls_pending = true;
+        if (mutual) ret.addElement(MessageElement.string("mutualauth", "true"));
+        // The reply is written to the plain socket before the switch, as the queue is empty this
+        // early in the connection
+        this.sendMessage(r);
+        this.socket = socket;
+        return true;
+    }
+
     private createConnectionForClient(m: Message, ret: MessageEntry): void
     {
+        if (this.requireTls && !this.secure) throw connectionError("Service requires TLS");
         const node = this.parent.node;
         const h = m.header;
         const for_node = h.receiverNodeID.isAnyNode || h.receiverNodeID.equals(node.nodeID);

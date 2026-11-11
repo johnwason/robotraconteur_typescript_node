@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { setDetectedNodesSource } from "../service/ServiceIndex.js";
 import { NodeID, parseConnectionUrl, RobotRaconteurError, RobotRaconteurNode, ServiceSubscription } from "robotraconteur";
 import { MessageErrorType } from "robotraconteur/internal";
 import { IPNodeDiscoveryFlags } from "../transports/IPNodeDiscovery.js";
@@ -175,6 +176,8 @@ export class NodeDiscovery
     async start(): Promise<void>
     {
         await this.transport.enableNodeDiscoveryListening((a) => this.nodeAnnounced(a), this.flags);
+        // The node's service index reports these, as Core's does
+        setDetectedNodesSource(this.node, () => this.detectedNodes.map((n) => ({ nodeID: n.nodeID, nodeName: n.nodeName, urls: n.urls.map((u) => u.url) })));
         this.cleanup_timer = setInterval(() => this.cleanNodes(), Math.min(5000, this.node_expiration));
         this.cleanup_timer.unref();
         this.started = true;
@@ -186,6 +189,7 @@ export class NodeDiscovery
         this.started = false;
         for (const s of [...this.subscribers]) s.close();
         clearInterval(this.cleanup_timer);
+        setDetectedNodesSource(this.node, null);
         this.transport.disableNodeDiscoveryListening();
     }
 

@@ -17,6 +17,7 @@ import { createServer } from "node:net";
 import type { AddressInfo, Server, Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { RobotRaconteurError } from "robotraconteur";
+import type { NodeID } from "robotraconteur";
 import { MessageErrorType } from "robotraconteur/internal";
 import type { StreamConnection } from "robotraconteur/internal";
 import type { SocketAdapter, SocketEvents, StreamTransportParent } from "robotraconteur/internal";
@@ -28,6 +29,18 @@ import { ServerStreamConnection } from "./StreamConnections.js";
 const PORT_SHARER_PORT = 48653;
 
 /** Origins that may connect with a WebSocket, the defaults of Core */
+/**
+ * The host and port of the local end of an accepted socket, as Core reports it to the service
+ * index, with IPv6 addresses in brackets without a scope
+ */
+export function urlHost(socket: { localAddress?: string; localPort?: number }): string
+{
+    let address = (socket.localAddress ?? "").replace(/%.*$/, "");
+    if (address.startsWith("::ffff:") && address.includes(".")) address = address.substring(7);
+    if (address === "" || !socket.localPort) return "";
+    return `${address.includes(":") ? `[${address}]` : address}:${socket.localPort}`;
+}
+
 export const DEFAULT_WEBSOCKET_ALLOWED_ORIGINS: readonly string[] = [
     "null",
     "file://",
@@ -73,7 +86,14 @@ export interface TcpServerParent extends StreamTransportParent
     maxConnectionCount: number;
     /** Milliseconds a client has to identify its protocol and create the connection */
     handshakeTimeout: number;
+    /** Close connections that do not start TLS first */
+    requireTls: boolean;
     addServerConnection(c: StreamConnection): void;
+    /**
+     * Switch an accepted socket to TLS with the node certificate. detach stops the plain socket
+     * from delivering data. Throws, before calling detach, if there is no node certificate
+     */
+    startServerTls(socket: Socket, detach: () => void, events: SocketEvents, mutualAuth: boolean, clientNodeID: NodeID, onSecure: (peer: NodeID | null) => void, onFailed: (e: Error) => void): SocketAdapter;
 }
 
 function httpError(socket: Duplex, status: string): void
@@ -102,8 +122,12 @@ export class TcpServer
     }
 
     /** Listen on all addresses, or only on loopback. Port 0 picks a free port */
+    /** Set if the server only accepts connections from this computer */
+    localhostOnly = false;
+
     async start(port: number, localhost_only: boolean): Promise<void>
     {
+        this.localhostOnly = localhost_only;
         if (port === PORT_SHARER_PORT) throw new RobotRaconteurError(MessageErrorType.InvalidArgument, "RobotRaconteur.InvalidArgument", "Port 48653 is reserved for the Robot Raconteur port sharer");
         try
         {
@@ -187,14 +211,26 @@ export class TcpServer
     private async attachStream(socket: Socket, head: Buffer): Promise<void>
     {
         const c = new ServerStreamConnection(this.parent);
+        c.urlHost = urlHost(socket);
+        c.requireTls = this.parent.requireTls;
         let events: SocketEvents | undefined;
+        let on_data: ((d: Buffer) => void) | undefined;
+        let on_close: (() => void) | undefined;
         const open = async (e: SocketEvents): Promise<SocketAdapter> =>
         {
             events = e;
-            socket.on("data", (d: Buffer) => e.onData(d));
-            socket.on("close", () => e.onClose());
+            on_data = (d: Buffer) => e.onData(d);
+            on_close = () => e.onClose();
+            socket.on("data", on_data);
+            socket.on("close", on_close);
             return new TcpSocketAdapter(socket);
         };
+        const detach = () =>
+        {
+            socket.off("data", on_data!);
+            socket.off("close", on_close!);
+        };
+        c.startTls = (e, mutual, client, on_secure, on_failed) => this.parent.startServerTls(socket, detach, e, mutual, client, on_secure, on_failed);
         try
         {
             await c.accept(open, this.parent.handshakeTimeout);
@@ -251,12 +287,16 @@ export class TcpServer
             httpError(socket, "403 Forbidden Origin");
             return;
         }
-        this.wss!.handleUpgrade(req, socket, head, (ws) => void this.attachWebSocket(ws));
+        this.wss!.handleUpgrade(req, socket, head, (ws) => void this.attachWebSocket(ws, urlHost(req.socket)));
     }
 
-    private async attachWebSocket(ws: WsLike & NodeJS.EventEmitter): Promise<void>
+    private async attachWebSocket(ws: WsLike & NodeJS.EventEmitter, host: string): Promise<void>
     {
+        // STARTTLS is not used over WebSockets, which use wss for TLS
         const c = new ServerStreamConnection(this.parent);
+        c.urlScheme = "rr+ws";
+        c.urlHost = host;
+        c.requireTls = this.parent.requireTls;
         const open = async (e: SocketEvents): Promise<SocketAdapter> =>
         {
             ws.on("message", (data: Buffer, is_binary: boolean) =>

@@ -133,11 +133,70 @@ function bindSocket(socket: Socket, options: { port: number; address: string }):
     });
 }
 
+async function sendFrom(source: LocalAddress, data: Buffer, flags: number): Promise<void>
+{
+    const v6 = source.info.family === "IPv6";
+    if (!v6 && !(flags & IPNodeDiscoveryFlags.IPv4Broadcast)) return;
+
+    const socket = createSocket({ type: v6 ? "udp6" : "udp4", reuseAddr: true });
+    socket.on("error", () => undefined);
+    try
+    {
+        await bindSocket(socket, { port: 0, address: v6 ? `${source.address}%${source.scope}` : source.address });
+        const destinations: string[] = [];
+        if (v6)
+        {
+            socket.setMulticastInterface(`::%${source.scope}`);
+            socket.setMulticastLoopback(true);
+            for (const [flag, group] of MULTICAST_GROUPS)
+            {
+                if (!(flags & flag)) continue;
+                if (isLoopback(source.address) && flag !== IPNodeDiscoveryFlags.NodeLocal) continue;
+                destinations.push(`${group}%${source.scope}`);
+            }
+        }
+        else
+        {
+            socket.setBroadcast(true);
+            destinations.push("255.255.255.255");
+        }
+        for (const d of destinations)
+        {
+            await new Promise<void>((resolve) => socket.send(data, ANNOUNCE_PORT, d, () => resolve()));
+        }
+    }
+    finally
+    {
+        socket.close();
+    }
+}
+
+function joinGroups(socket: Socket, flags: number): void
+{
+    const scopes = new Set(localAddresses().filter((a) => a.info.family === "IPv6").map((a) => a.scope));
+    for (const [flag, group] of MULTICAST_GROUPS)
+    {
+        if (!(flags & flag)) continue;
+        for (const scope of scopes)
+        {
+            try
+            {
+                socket.addMembership(group, `::%${scope}`);
+            }
+            catch
+            {
+                // Not every interface supports multicast
+            }
+        }
+    }
+}
+
 /** Listens for UDP node announcements and sends discovery requests */
 export class IPNodeDiscovery
 {
     private sockets: Socket[] = [];
-    private request_id = NodeID.newUniqueID();
+    /** The ID in this node's discovery requests, which its own announcer ignores */
+    readonly requestID = NodeID.newUniqueID();
     private request_timer: ReturnType<typeof setTimeout> | undefined;
     private closed = false;
 
@@ -149,7 +208,7 @@ export class IPNodeDiscovery
         if (MULTICAST_GROUPS.some(([f]) => this.flags & f))
         {
             const socket = await this.listen("udp6", "::");
-            if (socket) this.joinGroups(socket);
+            if (socket) joinGroups(socket, this.flags);
         }
         if (this.sockets.length === 0) throw new Error("Could not listen for node announcements");
         this.sendDiscoveryRequest();
@@ -183,26 +242,6 @@ export class IPNodeDiscovery
         return socket;
     }
 
-    private joinGroups(socket: Socket): void
-    {
-        const scopes = new Set(localAddresses().filter((a) => a.info.family === "IPv6").map((a) => a.scope));
-        for (const [flag, group] of MULTICAST_GROUPS)
-        {
-            if (!(this.flags & flag)) continue;
-            for (const scope of scopes)
-            {
-                try
-                {
-                    socket.addMembership(group, `::%${scope}`);
-                }
-                catch
-                {
-                    // Not every interface supports multicast
-                }
-            }
-        }
-    }
-
     private packetReceived(data: Buffer, sender: string): void
     {
         if (this.closed || data.length > MAX_PACKET_SIZE) return;
@@ -217,7 +256,7 @@ export class IPNodeDiscovery
         const send = (remaining: number) =>
         {
             if (this.closed) return;
-            this.broadcast(`${REQUEST_MAGIC}\n${this.request_id.toString()}\n`);
+            this.broadcast(`${REQUEST_MAGIC}\n${this.requestID.toString()}\n`);
             if (remaining <= 1) return;
             this.request_timer = setTimeout(() => send(remaining - 1), 900 + Math.random() * 600);
             this.request_timer.unref();
@@ -229,45 +268,7 @@ export class IPNodeDiscovery
     {
         for (const a of localAddresses())
         {
-            void this.sendFrom(a, Buffer.from(packet, "ascii")).catch(() => undefined);
-        }
-    }
-
-    private async sendFrom(source: LocalAddress, data: Buffer): Promise<void>
-    {
-        const v6 = source.info.family === "IPv6";
-        if (!v6 && !(this.flags & IPNodeDiscoveryFlags.IPv4Broadcast)) return;
-
-        const socket = createSocket({ type: v6 ? "udp6" : "udp4", reuseAddr: true });
-        socket.on("error", () => undefined);
-        try
-        {
-            await bindSocket(socket, { port: 0, address: v6 ? `${source.address}%${source.scope}` : source.address });
-            const destinations: string[] = [];
-            if (v6)
-            {
-                socket.setMulticastInterface(`::%${source.scope}`);
-                socket.setMulticastLoopback(true);
-                for (const [flag, group] of MULTICAST_GROUPS)
-                {
-                    if (!(this.flags & flag)) continue;
-                    if (isLoopback(source.address) && flag !== IPNodeDiscoveryFlags.NodeLocal) continue;
-                    destinations.push(`${group}%${source.scope}`);
-                }
-            }
-            else
-            {
-                socket.setBroadcast(true);
-                destinations.push("255.255.255.255");
-            }
-            for (const d of destinations)
-            {
-                await new Promise<void>((resolve) => socket.send(data, ANNOUNCE_PORT, d, () => resolve()));
-            }
-        }
-        finally
-        {
-            socket.close();
+            void sendFrom(a, Buffer.from(packet, "ascii"), this.flags).catch(() => undefined);
         }
     }
 
@@ -275,6 +276,113 @@ export class IPNodeDiscovery
     {
         this.closed = true;
         clearTimeout(this.request_timer);
+        for (const s of this.sockets) s.close();
+        this.sockets.length = 0;
+    }
+}
+
+/**
+ * Announces this node, as Core's IPNodeDiscovery does for a node that serves: 500 ms after
+ * starting, every period after that, soon after the node's services change, and when another
+ * node sends a discovery request. packets(address) gives the packets to send from a local address,
+ * one for each URL scheme, or none.
+ */
+export class NodeAnnouncer
+{
+    /** Milliseconds between announcements. Core's default for TCP */
+    period = 55000;
+
+    private sockets: Socket[] = [];
+    private timer: ReturnType<typeof setTimeout> | undefined;
+    private due = 0;
+    private closed = false;
+
+    constructor(private packets: (address: string) => string[], private flags: number, private is_own_request: (id: NodeID) => boolean = () => false) {}
+
+    async start(): Promise<void>
+    {
+        // Listen for discovery requests on the announcement port. Announcements still go out if
+        // another program holds the port without sharing it
+        if (this.flags & IPNodeDiscoveryFlags.IPv4Broadcast) await this.listen("udp4", "0.0.0.0");
+        if (MULTICAST_GROUPS.some(([f]) => this.flags & f))
+        {
+            const socket = await this.listen("udp6", "::");
+            if (socket) joinGroups(socket, this.flags);
+        }
+        this.schedule(500);
+    }
+
+    /** Announce within 500 ms, as Core does when the node's services change */
+    announceNow(): void
+    {
+        this.schedule(500);
+    }
+
+    private schedule(delay: number): void
+    {
+        if (this.closed) return;
+        const due = Date.now() + delay;
+        if (this.timer !== undefined && this.due <= due) return;
+        clearTimeout(this.timer);
+        this.due = due;
+        this.timer = setTimeout(() => this.announce(), delay);
+        this.timer.unref();
+    }
+
+    private announce(): void
+    {
+        this.timer = undefined;
+        if (this.closed) return;
+        for (const a of localAddresses())
+        {
+            for (const p of this.packets(a.address))
+            {
+                void sendFrom(a, Buffer.from(p, "ascii"), this.flags).catch(() => undefined);
+            }
+        }
+        this.schedule(this.period);
+    }
+
+    private async listen(type: "udp4" | "udp6", address: string): Promise<Socket | null>
+    {
+        const socket = createSocket({ type, reuseAddr: true, ipv6Only: type === "udp6" });
+        try
+        {
+            await bindSocket(socket, { port: ANNOUNCE_PORT, address });
+        }
+        catch
+        {
+            socket.close();
+            return null;
+        }
+        socket.on("error", () => undefined);
+        socket.on("message", (data) => this.packetReceived(data));
+        socket.unref();
+        this.sockets.push(socket);
+        return socket;
+    }
+
+    private packetReceived(data: Buffer): void
+    {
+        if (this.closed || data.length > MAX_PACKET_SIZE) return;
+        const packet = data.toString("ascii");
+        if (!packet.startsWith(REQUEST_MAGIC)) return;
+        const lines = packet.split("\n");
+        if (lines.length < 3) return;
+        try
+        {
+            if (!this.is_own_request(new NodeID(lines[1]!.split(",")[0]!))) this.announceNow();
+        }
+        catch
+        {
+            // Not a valid request
+        }
+    }
+
+    close(): void
+    {
+        this.closed = true;
+        clearTimeout(this.timer);
         for (const s of this.sockets) s.close();
         this.sockets.length = 0;
     }
