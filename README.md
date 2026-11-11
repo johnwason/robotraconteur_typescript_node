@@ -2,9 +2,9 @@
 
 # robotraconteur-node
 
-Node.js additions for the [robotraconteur](https://github.com/johnwason/robotraconteur_typescript) TypeScript client: the `rr+tcp` transport and discovery of nodes and services on the network. Browsers cannot use TCP sockets or UDP, so these live in a separate package and the browser library stays small.
+Node.js additions for the [robotraconteur](https://github.com/johnwason/robotraconteur_typescript) TypeScript client: the `rr+tcp` transport, services, and discovery of nodes and services on the network. Browsers cannot use TCP sockets or UDP, so these live in a separate package and the browser library stays small.
 
-**Status:** early development. The client side of TCP, TLS (`rrs+tcp`), WebSockets, discovery, and subscriptions by service type are implemented. Services and servers, and the Local transport, are not.
+**Status:** early development. The client side of TCP, TLS (`rrs+tcp`), WebSockets, discovery, and subscriptions by service type are implemented. Services support properties, functions, objrefs, and events, served over `rr+tcp` and `rr+ws`. Generators, wires, pipes, callbacks, memories, authentication, locks, TLS for services, announcing services for discovery, and the Local transport are not implemented yet.
 
 Requires Node.js 22 or newer.
 
@@ -195,6 +195,44 @@ A group combines its attributes and any nested groups with `"or"` (the default),
 Without a filter, a subscription tries every service of the type, including any that need a password. A service that fails to connect 25 times in a row is dropped until it is announced again.
 
 `discovery.subscribeServiceInfo2(types, filter)` tracks services without connecting to them, with `getDetectedServiceInfo2()`, `addServiceDetectedListener`, and `addServiceLostListener`.
+
+## Services
+
+A service is a plain object, used the way Python uses one. Properties are read and written as its attributes, functions call its methods, which may return a promise, and an objref named `x` calls its `get_x(index)` method. The node puts an `EventHook` on each event member that does not have one, and the service sends the event to its clients with `fire()`. A method named `RRServiceObjectInit(context, servicePath)` is called when the object is first served.
+
+```js
+import { RobotRaconteurNode } from "robotraconteur";
+import { EventHook, TcpTransport } from "robotraconteur-node";
+
+class Counter {
+    count = 0;
+    changed = new EventHook();
+
+    increment(amount) {
+        this.count += amount;
+        this.changed.fire(this.count);
+        return this.count;
+    }
+}
+
+const node = new RobotRaconteurNode();
+node.nodeName = "simple_counter";
+const tcp = new TcpTransport(node);
+node.registerTransport(tcp);
+node.registerServiceType(definitionText);
+
+await tcp.startServer(22222);
+node.registerService("counter", "experimental.simple_counter.Counter", new Counter());
+```
+
+[examples/simple_service.mjs](examples/simple_service.mjs) is a complete service. Register service definitions from their text, which is what clients receive, including its `##` documentation. Clients connect with `rr+tcp://localhost:22222?service=counter`, or with `rr+ws` on the same port. Browser pages may connect only from the origins in `tcp.webSocketAllowedOrigins`, which defaults to the same list as Core.
+
+Some details follow Core and Python:
+
+- An objref's `get_` method returns the object, or `[object, type]` when the object's type is not the declared one. That form is required for `varobject`. Objects are kept once returned. Call `context.releaseServicePath(path)` to have the objref asked again.
+- Errors thrown by a method are returned to the client. Throw a `RobotRaconteurError` to choose its name, and to add `errorSubName` or `errorParam`. Other errors are returned as `RemoteError` with the JavaScript error name.
+- `ServerEndpoint.current` is the client whose request is being served, including after `await` in the same request.
+- `registerService` returns the `ServerContext`, which holds the service `attributes` sent to clients, `addExtraImport`, `releaseServicePath`, and `close()`.
 
 ## Developing
 

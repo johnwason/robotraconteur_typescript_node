@@ -13,6 +13,12 @@
 // limitations under the License.
 
 export { TcpTransport } from "./transports/TcpTransport.js";
+export { DEFAULT_WEBSOCKET_ALLOWED_ORIGINS, isWebSocketOriginAllowed } from "./transports/TcpServer.js";
+export { EventHook } from "./service/EventHook.js";
+export { ServerContext, ServerEndpoint } from "./service/ServerContext.js";
+export type { ServerServiceListener } from "./service/ServerContext.js";
+export type { ServiceObject } from "./service/ServiceSkel.js";
+import "./service/ServiceHost.js";
 export type { TlsClientOptions, WebSocketClientOptions } from "./transports/TcpTransport.js";
 export { CertificateError, verifyNodeCertificate } from "./transports/NodeCertificate.js";
 export { userConfigDir } from "./transports/NodeDirectories.js";

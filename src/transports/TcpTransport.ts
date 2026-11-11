@@ -24,54 +24,20 @@ import { join } from "node:path";
 import { connect as tlsConnect, TLSSocket } from "node:tls";
 import { parseConnectionUrl, RobotRaconteurError } from "robotraconteur";
 import type { Endpoint, ITransportConnection, RobotRaconteurNode, ServiceStub, Transport } from "robotraconteur";
-import { connectionError, MessageErrorType, StreamClientConnection } from "robotraconteur/internal";
-import type { SocketAdapter, SocketEvents, StreamTransportParent, TlsStarter } from "robotraconteur/internal";
+import { connectionError, MessageErrorType, StreamConnection } from "robotraconteur/internal";
+import { TcpSocketAdapter, WebSocketAdapter, WEBSOCKET_PROTOCOL } from "./SocketAdapters.js";
+
+export { WebSocketAdapter };
+import type { SocketAdapter, SocketEvents, TlsStarter } from "robotraconteur/internal";
 import { CertificateError, verifyNodeCertificate } from "./NodeCertificate.js";
 import { userConfigDir } from "./NodeDirectories.js";
 import { ROOT_CA_2015, ROOT_CA_2020 } from "./RootCertificates.js";
 import { interfaceScope, isIPv6LinkLocal } from "./NetworkUtil.js";
 import { IPNodeDiscovery, IPNodeDiscoveryFlags } from "./IPNodeDiscovery.js";
 import type { NodeAnnouncement } from "./IPNodeDiscovery.js";
+import { DEFAULT_WEBSOCKET_ALLOWED_ORIGINS, TcpServer } from "./TcpServer.js";
+import type { TcpServerParent } from "./TcpServer.js";
 
-/** A connected net.Socket or TLS socket, using the write return value and drain event for backpressure */
-class TcpSocketAdapter implements SocketAdapter
-{
-    constructor(private socket: Socket) {}
-
-    write(frame: Uint8Array): Promise<void> | void
-    {
-        if (this.socket.write(frame)) return;
-        return new Promise<void>((resolve, reject) =>
-        {
-            const cleanup = () =>
-            {
-                this.socket.off("drain", on_drain);
-                this.socket.off("close", on_close);
-            };
-            const on_drain = () =>
-            {
-                cleanup();
-                resolve();
-            };
-            const on_close = () =>
-            {
-                cleanup();
-                reject(connectionError("Transport connection closed"));
-            };
-            this.socket.once("drain", on_drain);
-            this.socket.once("close", on_close);
-        });
-    }
-
-    close(): void
-    {
-        this.socket.destroy();
-    }
-}
-
-const WEBSOCKET_PROTOCOL = "robotraconteur.robotraconteur.com";
-/** A send waits for the data to reach the socket once this many bytes are queued, as for a TCP socket */
-const WEBSOCKET_SEND_HIGH_WATER_MARK = 16 * 1024;
 
 /** Options for rr+ws and rr+wss connections, such as a certificate authority for a private server */
 export interface WebSocketClientOptions
@@ -84,42 +50,6 @@ export interface WebSocketClientOptions
     /** Set false only for testing. Defaults to true */
     rejectUnauthorized?: boolean;
     headers?: Record<string, string>;
-}
-
-/** The parts of a WebSocket from the ws package that are used, so that its types are not needed by users */
-interface WsLike
-{
-    readonly readyState: number;
-    readonly bufferedAmount: number;
-    send(data: Uint8Array, options: { binary: boolean }, cb: (err?: Error) => void): void;
-    terminate(): void;
-}
-
-/** A WebSocket from the ws package. Each send reports when its data has been written to the socket */
-export class WebSocketAdapter implements SocketAdapter
-{
-    constructor(private ws: WsLike) {}
-
-    write(frame: Uint8Array): Promise<void> | void
-    {
-        if (this.ws.readyState !== 1) return Promise.reject(connectionError("Transport connection closed"));
-        const sent = new Promise<void>((resolve, reject) =>
-        {
-            this.ws.send(frame, { binary: true }, (e) => (e ? reject(connectionError("Transport connection closed")) : resolve()));
-        });
-        // Like a socket write, continue at once while little is queued, and otherwise wait for it to be sent
-        if (this.ws.bufferedAmount < WEBSOCKET_SEND_HIGH_WATER_MARK)
-        {
-            sent.catch(() => undefined);
-            return;
-        }
-        return sent;
-    }
-
-    close(): void
-    {
-        this.ws.terminate();
-    }
 }
 
 const LOOPBACK: LookupAddress[] = [{ address: "127.0.0.1", family: 4 }, { address: "::1", family: 6 }];
@@ -419,10 +349,10 @@ async function connectAny(hosts: string[], port: number, timeout: number): Promi
 }
 
 /**
- * Client transport for rr+tcp and rrs+tcp using a TCP socket, and for rr+ws and rr+wss using a
- * WebSocket. Also discovers nodes using UDP.
+ * Transport for rr+tcp and rrs+tcp using a TCP socket, and for rr+ws and rr+wss using a WebSocket.
+ * It connects clients, serves services after startServer(), and discovers nodes using UDP.
  */
-export class TcpTransport implements Transport, StreamTransportParent
+export class TcpTransport implements Transport, TcpServerParent
 {
     /** Period for connection test messages in milliseconds */
     heartbeatPeriod = 5000;
@@ -440,8 +370,18 @@ export class TcpTransport implements Transport, StreamTransportParent
      */
     requireTls = false;
 
-    private connections = new Set<StreamClientConnection>();
+    /** Accept WebSocket clients on the server port, as Core does */
+    acceptWebSockets = true;
+    /** Origins of browser pages that may connect with a WebSocket. Core's defaults */
+    webSocketAllowedOrigins: string[] = [...DEFAULT_WEBSOCKET_ALLOWED_ORIGINS];
+    /** Maximum number of client sockets the server accepts at once. 0 for no limit */
+    maxConnectionCount = 0;
+    /** Milliseconds a client has to identify its protocol and create the connection */
+    handshakeTimeout = 10000;
+
+    private connections = new Set<StreamConnection>();
     private discovery: IPNodeDiscovery | null = null;
+    private server: TcpServer | null = null;
 
     constructor(public node: RobotRaconteurNode) {}
 
@@ -456,7 +396,7 @@ export class TcpTransport implements Transport, StreamTransportParent
         if (u.host === "") throw connectionError("Invalid connection URL for TCP");
         if (this.requireTls && u.scheme !== "rrs+tcp") throw connectionError(`TLS is required, so ${u.scheme} cannot be used. Use rrs+tcp`);
 
-        const c = new StreamClientConnection(this, u.nodeid, u.nodename, endpoint);
+        const c = new StreamConnection(this, u.nodeid, u.nodename, endpoint);
         const websocket = u.scheme === "rr+ws" || u.scheme === "rr+wss";
         let start_tls: TlsStarter | undefined;
         const open = async (events: SocketEvents): Promise<SocketAdapter> =>
@@ -488,14 +428,54 @@ export class TcpTransport implements Transport, StreamTransportParent
         return c;
     }
 
-    removeConnection(c: StreamClientConnection): void
+    removeConnection(c: StreamConnection): void
     {
         this.connections.delete(c);
     }
 
-    private connectionOf(client: ServiceStub): StreamClientConnection
+    addServerConnection(c: StreamConnection): void
     {
-        const c = client.context.transportConnection as StreamClientConnection | null;
+        this.connections.add(c);
+    }
+
+    /**
+     * Listen for clients on a port, for services registered with node.registerService. Port 0
+     * picks a free port, which listenPort reports. As in Core, rr+ws clients are accepted on the
+     * same port.
+     */
+    async startServer(port = 0, options: { localhostOnly?: boolean } = {}): Promise<void>
+    {
+        if (this.server) throw new RobotRaconteurError(MessageErrorType.InvalidOperation, "RobotRaconteur.InvalidOperation", "Server already started");
+        const server = new TcpServer(this);
+        await server.start(port, options.localhostOnly ?? false);
+        this.server = server;
+    }
+
+    /** Stop listening. Connected clients are not affected */
+    stopServer(): void
+    {
+        this.server?.close();
+        this.server = null;
+    }
+
+    /** The port the server listens on, or 0 if it is not listening */
+    get listenPort(): number
+    {
+        return this.server?.listenPort ?? 0;
+    }
+
+    /** URLs that clients on this computer can use to connect to a service of this node */
+    getServerListenUrls(service: string): string[]
+    {
+        const port = this.listenPort;
+        if (port === 0) return [];
+        const id = this.node.nodeID.toString().replace(/[{}]/g, "");
+        return [`rr+tcp://localhost:${port}?nodeid=${id}&service=${service}`];
+    }
+
+    private connectionOf(client: ServiceStub): StreamConnection
+    {
+        const c = client.context.transportConnection as StreamConnection | null;
         if (!c || !this.connections.has(c)) throw connectionError("The client is not connected using this transport");
         return c;
     }
@@ -577,6 +557,7 @@ export class TcpTransport implements Transport, StreamTransportParent
 
     close(): void
     {
+        this.stopServer();
         this.disableNodeDiscoveryListening();
         for (const c of [...this.connections]) c.close();
     }
