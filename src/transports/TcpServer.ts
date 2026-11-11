@@ -21,8 +21,7 @@ import type { NodeID } from "robotraconteur";
 import { MessageErrorType } from "robotraconteur/internal";
 import type { StreamConnection } from "robotraconteur/internal";
 import type { SocketAdapter, SocketEvents, StreamTransportParent } from "robotraconteur/internal";
-import { TcpSocketAdapter, WebSocketAdapter, WEBSOCKET_PROTOCOL } from "./SocketAdapters.js";
-import type { WsLike } from "./SocketAdapters.js";
+import { TcpSocketAdapter, WEBSOCKET_PROTOCOL } from "./SocketAdapters.js";
 import { ServerStreamConnection } from "./StreamConnections.js";
 
 /** The port of the Robot Raconteur port sharer, which a service must not listen on */
@@ -90,13 +89,19 @@ export interface TcpServerParent extends StreamTransportParent
     requireTls: boolean;
     addServerConnection(c: StreamConnection): void;
     /**
+     * Check and accept a WebSocket upgrade. The URL reported to clients uses the Host header, or
+     * if hostHeader is false the local address of the socket, as Core does
+     */
+    serveUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, hostHeader: boolean): Promise<void>;
+    /**
      * Switch an accepted socket to TLS with the node certificate. detach stops the plain socket
      * from delivering data. Throws, before calling detach, if there is no node certificate
      */
     startServerTls(socket: Socket, detach: () => void, events: SocketEvents, mutualAuth: boolean, clientNodeID: NodeID, onSecure: (peer: NodeID | null) => void, onFailed: (e: Error) => void): SocketAdapter;
 }
 
-function httpError(socket: Duplex, status: string): void
+/** Refuse a WebSocket upgrade with an HTTP status, as Core does */
+export function httpError(socket: Duplex, status: string): void
 {
     socket.end(`HTTP/1.1 ${status}\r\nUpgrade: websocket\r\nSec-WebSocket-Protocol: ${WEBSOCKET_PROTOCOL}\r\nSec-WebSocket-Version: 13\r\nConnection: close\r\n\r\n`);
     socket.destroy();
@@ -111,7 +116,6 @@ export class TcpServer
     private servers: Server[] = [];
     private sockets = new Set<Socket>();
     private http: HttpServer | null = null;
-    private wss: { handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, cb: (ws: WsLike & NodeJS.EventEmitter) => void): void } | null = null;
     private port = 0;
 
     constructor(private parent: TcpServerParent) {}
@@ -252,14 +256,12 @@ export class TcpServer
             if (!this.http)
             {
                 const { createServer: createHttpServer } = await import("node:http");
-                const { WebSocketServer } = await import("ws");
-                this.wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: this.parent.maxMessageSize, handleProtocols: (protocols: Set<string>) => (protocols.has(WEBSOCKET_PROTOCOL) ? WEBSOCKET_PROTOCOL : false) }) as unknown as typeof this.wss;
                 this.http = createHttpServer((_req, res) =>
                 {
                     res.writeHead(404);
                     res.end();
                 });
-                this.http.on("upgrade", (req: IncomingMessage, s: Duplex, h: Buffer) => this.upgrade(req, s, h));
+                this.http.on("upgrade", (req: IncomingMessage, s: Duplex, h: Buffer) => void this.parent.serveUpgrade(req, s, h, false));
                 this.http.on("clientError", (_e, s: Duplex) => s.destroy());
             }
             socket.unshift(head);
@@ -273,52 +275,6 @@ export class TcpServer
     }
 
     /** Check the request as Core does, then accept the WebSocket */
-    private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void
-    {
-        const protocols = req.headers["sec-websocket-protocol"];
-        if (protocols !== undefined && !protocols.split(",").some((p) => p.trim().toLowerCase() === WEBSOCKET_PROTOCOL))
-        {
-            httpError(socket, "426 Upgrade Required");
-            return;
-        }
-        const origin = req.headers.origin;
-        if (origin !== undefined && !isWebSocketOriginAllowed(origin, this.parent.webSocketAllowedOrigins))
-        {
-            httpError(socket, "403 Forbidden Origin");
-            return;
-        }
-        this.wss!.handleUpgrade(req, socket, head, (ws) => void this.attachWebSocket(ws, urlHost(req.socket)));
-    }
-
-    private async attachWebSocket(ws: WsLike & NodeJS.EventEmitter, host: string): Promise<void>
-    {
-        // STARTTLS is not used over WebSockets, which use wss for TLS
-        const c = new ServerStreamConnection(this.parent);
-        c.urlScheme = "rr+ws";
-        c.urlHost = host;
-        c.requireTls = this.parent.requireTls;
-        const open = async (e: SocketEvents): Promise<SocketAdapter> =>
-        {
-            ws.on("message", (data: Buffer, is_binary: boolean) =>
-            {
-                if (is_binary) e.onData(data);
-            });
-            ws.on("error", () => undefined); // Always followed by close
-            ws.on("close", () => e.onClose());
-            return new WebSocketAdapter(ws);
-        };
-        try
-        {
-            await c.accept(open, this.parent.handshakeTimeout);
-            this.parent.addServerConnection(c);
-        }
-        catch
-        {
-            ws.terminate();
-        }
-    }
-
-    /** Stop listening and drop connections that have not started a protocol */
     close(): void
     {
         for (const s of this.servers) s.close();
@@ -326,7 +282,6 @@ export class TcpServer
         this.port = 0;
         this.http?.close();
         this.http = null;
-        this.wss = null;
         for (const s of [...this.sockets]) s.destroy();
         this.sockets.clear();
     }

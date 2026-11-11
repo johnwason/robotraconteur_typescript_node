@@ -142,15 +142,18 @@ export type ServerTlsStarter = (events: SocketEvents, mutualAuth: boolean, clien
 /** A connection accepted by a server, which answers the client's stream operations and requests to the node */
 export class ServerStreamConnection extends StreamConnection implements ServerTransportConnection
 {
-    /** The scheme and host:port of the local end, which connectionUrl reports */
+    /** The scheme, host:port, and path of the local end, which connectionUrl reports */
     urlScheme = "rr+tcp";
     urlHost = "";
+    urlPath = "/";
     /** Starts TLS when the client sends STARTTLS. Null if the connection cannot use TLS */
     startTls: ServerTlsStarter | null = null;
     /** Close connections that do not start TLS before anything else, as Core's RequireTls */
     requireTls = false;
+    /** True once the connection uses TLS, from STARTTLS, or from the web server for wss */
     secure = false;
     private tls_pending = false;
+    private starttls = false;
     /** The node ID in the client's verified certificate */
     private tls_peer: NodeID | null = null;
 
@@ -163,7 +166,7 @@ export class ServerStreamConnection extends StreamConnection implements ServerTr
     get connectionUrl(): string
     {
         if (this.urlHost === "") return "";
-        return `${this.secure ? this.urlScheme.replace(/^rr\+/, "rrs+") : this.urlScheme}://${this.urlHost}/`;
+        return `${this.starttls ? this.urlScheme.replace(/^rr\+/, "rrs+") : this.urlScheme}://${this.urlHost}${this.urlPath}`;
     }
 
     /** Set once the client has created the connection */
@@ -296,6 +299,7 @@ export class ServerStreamConnection extends StreamConnection implements ServerTr
         {
             this.tls_pending = false;
             this.secure = true;
+            this.starttls = true;
             this.tls_peer = peer;
         }, () => this.close());
         this.tls_pending = true;
