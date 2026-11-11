@@ -14,7 +14,7 @@
 
 // A service implemented in TypeScript, for testing the server with TypeScript and Core clients.
 
-import { RobotRaconteurError, VarValue } from "robotraconteur";
+import { NamedArrayView, RobotRaconteurError, VarValue } from "robotraconteur";
 import { EventHook, ServerEndpoint, WireBroadcaster, WireUnicastReceiver } from "../../src/index.js";
 import type { Callback, PipeEndpoint, PipeServer, ServerContext, WireServer } from "../../src/index.js";
 
@@ -32,6 +32,11 @@ end
 exception test_error
 
 struct point
+    field double x
+    field double y
+end
+
+namedarray vec
     field double x
     field double y
 end
@@ -76,6 +81,10 @@ object testroot
     function void set_w(double v)
     function double get_wpoke()
     function int32 close_pipes()
+    property vec[] vecs
+    function double sum_x(vec[] v)
+    function vec[] make_vecs(int32 n)
+    function bool received_view()
 end
 
 object sub
@@ -131,10 +140,47 @@ export class TestRoot
     private o1 = new Sub("o1");
     private n_calls = 0;
     released_o1 = 0;
+    /** Whether the last named arrays received were a NamedArrayView */
+    private received_view_value = false;
+    private vecs_value: unknown = [];
 
     set w1(v: number)
     {
         this.w1_value = v;
+    }
+
+    get vecs(): unknown
+    {
+        return this.vecs_value;
+    }
+
+    set vecs(v: unknown)
+    {
+        this.received_view_value = v instanceof NamedArrayView;
+        this.vecs_value = v;
+    }
+
+    sum_x(v: unknown): number
+    {
+        this.received_view_value = v instanceof NamedArrayView;
+        const items = v instanceof NamedArrayView ? v.toObjects() : (v as Record<string, unknown>[]);
+        return items.reduce((a, p) => a + (p.x as number), 0);
+    }
+
+    make_vecs(n: number): NamedArrayView
+    {
+        const v = this.context!.newNamedArrayView("experimental.ts_service_test.vec", n);
+        for (let i = 0; i < n; i++)
+        {
+            v.array[i * 2] = i;
+            v.array[i * 2 + 1] = i + 10;
+        }
+        return v;
+    }
+
+    received_view(): boolean
+    {
+        return this.received_view_value;
     }
 
     RRServiceObjectInit(context: ServerContext): void

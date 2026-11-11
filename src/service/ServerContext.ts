@@ -13,8 +13,8 @@
 // limitations under the License.
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { RobotRaconteurError } from "robotraconteur";
-import type { Endpoint, NodeID, VarValue, RobotRaconteurNode, ServiceDefinition, TypeDefinition } from "robotraconteur";
+import { NamedArrayView, RobotRaconteurError } from "robotraconteur";
+import type { DecodeOptions, NumericArray, Endpoint, NodeID, VarValue, RobotRaconteurNode, ServiceDefinition, TypeDefinition } from "robotraconteur";
 import type { ServerTransportConnection } from "../transports/StreamConnections.js";
 import { DataTypes, errorToEntry, getElement, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, packElement, TypeContext, unpackElement } from "robotraconteur/internal";
 import { ObjectLock, objectLockedError } from "./Locks.js";
@@ -227,6 +227,13 @@ export class ServerContext
 {
     /** Attributes reported to clients, such as for discovery filters. Values must be VarValue */
     readonly attributes = new Map<string, VarValue>();
+    /**
+     * How the service decodes values received from clients, such as function parameters, property
+     * values, and wire and pipe values. Set namedArrays or viewTypes to receive arrays of named arrays
+     * as NamedArrayView. Objects are used if not set. The node's decodeOptions are for its clients,
+     * and do not apply to services.
+     */
+    decodeOptions: DecodeOptions | undefined;
     /** @internal The service definitions of the node, for packing values */
     readonly types: TypeContext;
 
@@ -250,7 +257,7 @@ export class ServerContext
      */
     constructor(readonly node: RobotRaconteurNode, readonly serviceName: string, readonly rootObjectType: string, root: ServiceObject, private on_close: () => void, readonly securityPolicy: ServiceSecurityPolicy | null = null)
     {
-        this.types = new TypeContext(node.serviceTypes);
+        this.types = new TypeContext(node.serviceTypes, () => this.decodeOptions);
         const skel = new ServiceSkel(this, serviceName, root, rootObjectType);
         this.skels.set(serviceName, skel);
         skel.init();
@@ -356,6 +363,23 @@ export class ServerContext
                 console.error("Error in server service listener:", e);
             }
         }
+    }
+
+    /**
+     * Create a NamedArrayView of a named array type registered on the node, to send an array of named
+     * arrays without an object per element, as the client's newNamedArrayView
+     *
+     * @param type Qualified named array type, such as `com.robotraconteur.geometry.Vector3`
+     * @param countOrArray Number of zeroed elements, or a typed array of the type's number type to use as is
+     */
+    newNamedArrayView(type: string, countOrArray: number | NumericArray): NamedArrayView
+    {
+        const def = this.types.defs.get(type.substring(0, type.lastIndexOf(".")));
+        if (!def) throw serviceError(MessageErrorType.InvalidArgument, "InvalidArgument", `Unknown service type for ${type}`);
+        const r = this.types.resolve(type, def);
+        if (r.kind !== "namedarray") throw serviceError(MessageErrorType.InvalidArgument, "InvalidArgument", `${type} is not a named array`);
+        const l = this.types.namedArrayLayout(r);
+        return new NamedArrayView(l, typeof countOrArray === "number" ? new l.prim.ctor(countOrArray * l.length) : countOrArray);
     }
 
     /** Pack the attributes for a client */

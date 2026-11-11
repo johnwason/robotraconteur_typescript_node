@@ -14,6 +14,7 @@
 
 import { setDetectedNodesSource } from "../service/ServiceIndex.js";
 import { NodeID, parseConnectionUrl, RobotRaconteurError, RobotRaconteurNode, ServiceSubscription } from "robotraconteur";
+import type { ServiceSubscriptionOptions } from "robotraconteur";
 import { MessageErrorType } from "robotraconteur/internal";
 import { IPNodeDiscoveryFlags } from "../transports/IPNodeDiscovery.js";
 import type { NodeAnnouncement } from "../transports/IPNodeDiscovery.js";
@@ -412,10 +413,15 @@ export class NodeDiscovery
     /**
      * Connect to every service of the given types that is found, now or later, and keep them
      * connected. Types are matched against the root object and the types it implements.
+     *
+     * @param serviceTypes The qualified types to connect to
+     * @param filter Limits which services are used
+     * @param options Retry behavior and how the clients decode values. Retries every 15 seconds and
+     * gives up on a service after 25 consecutive failures unless set
      */
-    subscribeServiceByType(serviceTypes: string | string[], filter?: ServiceSubscriptionFilter): ServiceSubscription
+    subscribeServiceByType(serviceTypes: string | string[], filter?: ServiceSubscriptionFilter, options: ServiceSubscriptionOptions = {}): ServiceSubscription
     {
-        const subscription = new ServiceSubscription(this.node, { connectRetryDelay: 15000, connectErrorLimit: 25 });
+        const subscription = new ServiceSubscription(this.node, { connectRetryDelay: 15000, connectErrorLimit: 25, ...options });
         this.serviceTypeSource(subscription).start(typeof serviceTypes === "string" ? [serviceTypes] : serviceTypes, filter);
         return subscription;
     }

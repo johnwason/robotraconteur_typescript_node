@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { RobotRaconteurError, ServiceSubscription } from "robotraconteur";
+import type { DecodeOptions } from "robotraconteur";
 import { MessageErrorType } from "robotraconteur/internal";
 import type { NodeDiscovery, ServiceTypeSource } from "./NodeDiscovery.js";
 import type { ServiceSubscriptionFilter } from "./Subscriptions.js";
@@ -39,6 +40,8 @@ export interface ServiceSubscriptionManagerDetails
     filter?: ServiceSubscriptionFilter;
     /** Whether to connect. Defaults to true */
     enabled?: boolean;
+    /** How the clients decode received values. The node's decodeOptions if not set */
+    decodeOptions?: DecodeOptions;
 }
 
 type ConnectionMode = "url" | "type";
@@ -128,6 +131,7 @@ export class ServiceSubscriptionManager
     private apply(m: ManagedSubscription, details: ServiceSubscriptionManagerDetails, close: boolean): void
     {
         m.details = details;
+        m.subscription.decodeOptions = details.decodeOptions;
         const mode = details.enabled ? connectionMode(details) : null;
         if (mode === null)
         {

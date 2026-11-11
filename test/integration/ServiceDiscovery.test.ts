@@ -18,8 +18,8 @@ import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { promisify } from "node:util";
-import { RobotRaconteurNode, VarValue } from "robotraconteur";
-import { NodeDiscovery, TcpTransport } from "../../src/index.js";
+import { NamedArrayView, RobotRaconteurNode, VarValue } from "robotraconteur";
+import { NodeDiscovery, ServiceSubscriptionManager, TcpTransport } from "../../src/index.js";
 import { TEST_SERVICE_DEF, TestRoot } from "./TestService.js";
 import { PYTHON, root } from "./TestServer.js";
 
@@ -95,6 +95,39 @@ describe("discovery of services served by robotraconteur-node", { skip: has_link
         finally
         {
             await client.disconnectService(index);
+        }
+    });
+
+    test("subscriptions by type decode values with their options", { timeout: 60000 }, async () =>
+    {
+        const filter = { nodes: [{ nodeID: server.nodeID }], serviceNames: ["test"] };
+        const vecs = [{ x: 1, y: 2 }];
+
+        const s = discovery.subscribeServiceByType(TYPE, filter, { decodeOptions: { namedArrays: "view" } });
+        try
+        {
+            const c = await s.getDefaultClientWait(20000);
+            await c.setProperty("vecs", vecs);
+            assert.ok((await c.getProperty("vecs")) instanceof NamedArrayView);
+        }
+        finally
+        {
+            s.close();
+        }
+
+        const manager = new ServiceSubscriptionManager(discovery);
+        try
+        {
+            manager.addSubscription({ name: "t", serviceTypes: [TYPE], filter, decodeOptions: { namedArrays: "view" } });
+            const c = await manager.getSubscription("t").getDefaultClientWait(20000);
+            assert.ok((await c.getProperty("vecs")) instanceof NamedArrayView);
+            // An update without decode options goes back to the node's
+            manager.updateSubscription({ name: "t", serviceTypes: [TYPE], filter });
+            assert.deepEqual(await c.getProperty("vecs"), vecs);
+        }
+        finally
+        {
+            manager.close();
         }
     });
 

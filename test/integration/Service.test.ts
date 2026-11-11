@@ -18,7 +18,7 @@ import { connect as netConnect } from "node:net";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { promisify } from "node:util";
-import { GeneratorHandle, RobotRaconteurError, RobotRaconteurNode, VarValue } from "robotraconteur";
+import { GeneratorHandle, NamedArrayView, newNamedArrayView, RobotRaconteurError, RobotRaconteurNode, VarValue } from "robotraconteur";
 import type { Endpoint, ITransportConnection, ServiceStub } from "robotraconteur";
 import { isWebSocketOriginAllowed, TcpTransport } from "../../src/index.js";
 import type { ServerContext } from "../../src/index.js";
@@ -267,6 +267,50 @@ describe("services", () =>
             });
         });
     }
+
+    test("services receive arrays of named arrays as views when decodeOptions is set", async () =>
+    {
+        const c = await client.connectService(url());
+        const vecs = [{ x: 1, y: 2 }, { x: 3, y: 4 }];
+        try
+        {
+            assert.equal(await c.callFunction("sum_x", [vecs]), 4);
+            assert.equal(await c.callFunction("received_view"), false);
+
+            context.decodeOptions = { viewTypes: ["experimental.ts_service_test.vec"] };
+            assert.equal(await c.callFunction("sum_x", [vecs]), 4);
+            assert.equal(await c.callFunction("received_view"), true);
+            // The view the property received is sent back as it is
+            await c.setProperty("vecs", vecs);
+            assert.equal(await c.callFunction("received_view"), true);
+            assert.deepEqual(await c.getProperty("vecs"), vecs);
+        }
+        finally
+        {
+            context.decodeOptions = undefined;
+            await client.disconnectService(c);
+        }
+    });
+
+    test("services send views made with newNamedArrayView", async () =>
+    {
+        const c = await client.connectService(url());
+        try
+        {
+            assert.deepEqual(await c.callFunction("make_vecs", [2]), [{ x: 0, y: 10 }, { x: 1, y: 11 }]);
+            c.context.decodeOptions = { namedArrays: "view" };
+            const v = await c.callFunction("make_vecs", [3]);
+            assert.ok(v instanceof NamedArrayView);
+            assert.deepEqual(v.array, Float64Array.of(0, 10, 1, 11, 2, 12));
+            // And clients send views
+            assert.equal(await c.callFunction("sum_x", [newNamedArrayView(c, "experimental.ts_service_test.vec", Float64Array.of(5, 0, 6, 0))]), 11);
+            assert.throws(() => context.newNamedArrayView("experimental.ts_service_test.point", 1), RobotRaconteurError);
+        }
+        finally
+        {
+            await client.disconnectService(c);
+        }
+    });
 
     test("a released service path asks for the object again", async () =>
     {
