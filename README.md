@@ -105,7 +105,8 @@ Services are tested with ports of Core's Python test services in `test/service`,
 ## Releasing
 
 1. Update the version in `package.json` and add the changes to [CHANGELOG.md](CHANGELOG.md). If it needs a newer release of `robotraconteur`, publish that first and update the peer dependency.
-2. Publish a GitHub release in the robotraconteur organization, with a new tag named after the version, such as `v0.1.0`. The Publish workflow runs the tests, checks that the tag matches the version, and publishes to npm with provenance. It needs an npm token in the `NPM_TOKEN` secret of the repository.
+2. Publish a GitHub release in the robotraconteur organization, with a new tag named after the version, such as `v0.1.0`. The Publish workflow runs the tests, checks that the tag matches the version, and stages the release on npm with provenance. It needs a stage-only npm token in the `NPM_TOKEN` secret of the repository.
+3. Approve the staged version with 2FA, on npmjs.com under Staged Packages or with `npm stage approve <stage-id>`. It is published when approved.
 
 ## License
 
