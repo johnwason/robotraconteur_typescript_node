@@ -104,6 +104,11 @@ export class TcpClientConnection extends StreamConnection
 /** A transport connection accepted from a client. Several service endpoints may use it */
 export interface ServerTransportConnection extends ITransportConnection
 {
+    /**
+     * The URL of the local end of the connection, such as rr+tcp://192.168.1.2:22222/, which the
+     * service index reports for the node's services. Empty if the transport has none
+     */
+    readonly connectionUrl: string;
     /** Notify the endpoint when the connection closes */
     attachEndpoint(e: Endpoint): void;
     detachEndpoint(e: Endpoint): void;
@@ -125,6 +130,15 @@ export function isSpecialRequest(m: Message): boolean
 /** A connection accepted by a server, which answers the client's stream operations and requests to the node */
 export class ServerStreamConnection extends StreamConnection implements ServerTransportConnection
 {
+    /** The scheme and host:port of the local end, which connectionUrl reports */
+    urlScheme = "rr+tcp";
+    urlHost = "";
+
+    get connectionUrl(): string
+    {
+        return this.urlHost === "" ? "" : `${this.urlScheme}://${this.urlHost}/`;
+    }
+
     /** Set once the client has created the connection */
     private created = false;
     private handshake_timer: ReturnType<typeof setTimeout> | undefined;

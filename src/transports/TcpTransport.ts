@@ -36,7 +36,10 @@ import { CertificateError, verifyNodeCertificate } from "./NodeCertificate.js";
 import { userConfigDir } from "./NodeDirectories.js";
 import { ROOT_CA_2015, ROOT_CA_2020 } from "./RootCertificates.js";
 import { interfaceScope, isIPv6LinkLocal } from "./NetworkUtil.js";
-import { IPNodeDiscovery, IPNodeDiscoveryFlags } from "./IPNodeDiscovery.js";
+import { IPNodeDiscovery, IPNodeDiscoveryFlags, NodeAnnouncer } from "./IPNodeDiscovery.js";
+import { addServicesChangedListener, removeServicesChangedListener } from "../service/ServiceHost.js";
+import { nodeIDForUrl } from "../service/ServiceIndex.js";
+import { isLoopback } from "./NetworkUtil.js";
 import type { NodeAnnouncement } from "./IPNodeDiscovery.js";
 import { DEFAULT_WEBSOCKET_ALLOWED_ORIGINS, TcpServer } from "./TcpServer.js";
 import type { TcpServerParent } from "./TcpServer.js";
@@ -384,6 +387,9 @@ export class TcpTransport implements Transport, TcpServerParent
 
     private connections = new Set<StreamConnection>();
     private discovery: IPNodeDiscovery | null = null;
+    private announcer: NodeAnnouncer | null = null;
+    private announce_now = () => this.announcer?.announceNow();
+    private announce_period = 55000;
     private server: TcpServer | null = null;
 
     constructor(public node: RobotRaconteurNode) {}
@@ -548,6 +554,59 @@ export class TcpTransport implements Transport, TcpServerParent
         this.discovery?.setKeepAlive(keep_alive);
     }
 
+    /**
+     * Announce this node so that clients can discover its services, as Core's EnableNodeAnnounce.
+     * The node announces the server's port on each local address, IPv6 on node-local, link-local,
+     * and site-local multicast by default as in Core, and IPv4 broadcast if flags include it.
+     * Clients then list the services with the node's RobotRaconteurServiceIndex service.
+     */
+    async enableNodeAnnounce(flags: number = IPNodeDiscoveryFlags.NodeLocal | IPNodeDiscoveryFlags.LinkLocal | IPNodeDiscoveryFlags.SiteLocal): Promise<void>
+    {
+        this.disableNodeAnnounce();
+        const a = new NodeAnnouncer((address) => this.announcePackets(address), flags, (id) => this.discovery?.requestID.equals(id) ?? false);
+        a.period = this.announce_period;
+        this.announcer = a;
+        addServicesChangedListener(this.node, this.announce_now);
+        await a.start();
+    }
+
+    disableNodeAnnounce(): void
+    {
+        removeServicesChangedListener(this.node, this.announce_now);
+        this.announcer?.close();
+        this.announcer = null;
+    }
+
+    /** Milliseconds between announcements, 55000 by default as in Core */
+    get nodeAnnouncePeriod(): number
+    {
+        return this.announce_period;
+    }
+
+    set nodeAnnouncePeriod(ms: number)
+    {
+        this.announce_period = ms;
+        if (this.announcer) this.announcer.period = ms;
+    }
+
+    /** The announcement packets for a local address, in Core's format */
+    private announcePackets(address: string): string[]
+    {
+        const server = this.server;
+        if (!server || server.listenPort === 0) return [];
+        if (server.localhostOnly && !isLoopback(address)) return [];
+        const node = this.node;
+        const id = node.nodeID.toString();
+        const host = address.includes(":") ? `[${address.replace(/%.*$/, "")}]` : address;
+        const header = `Robot Raconteur Node Discovery Packet\n${node.nodeName === "" ? id : `${id},${node.nodeName}`}\n`;
+        return ["rr+tcp"].map((scheme) =>
+        {
+            const packet = `${header}${scheme}://${host}:${server.listenPort}/?nodeid=${nodeIDForUrl(node.nodeID)}&service=RobotRaconteurServiceIndex\n`;
+            const with_nonce = `${packet}ServiceStateNonce: ${node.serviceStateNonce}\n`;
+            return with_nonce.length <= 2048 ? with_nonce : packet;
+        });
+    }
+
     /** Ask nodes to announce themselves now, instead of waiting for their periodic announcement */
     sendDiscoveryRequest(): void
     {
@@ -557,6 +616,7 @@ export class TcpTransport implements Transport, TcpServerParent
     close(): void
     {
         this.stopServer();
+        this.disableNodeAnnounce();
         this.disableNodeDiscoveryListening();
         for (const c of [...this.connections]) c.close();
     }

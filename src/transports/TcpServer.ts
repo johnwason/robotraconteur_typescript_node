@@ -28,6 +28,18 @@ import { ServerStreamConnection } from "./StreamConnections.js";
 const PORT_SHARER_PORT = 48653;
 
 /** Origins that may connect with a WebSocket, the defaults of Core */
+/**
+ * The host and port of the local end of an accepted socket, as Core reports it to the service
+ * index, with IPv6 addresses in brackets without a scope
+ */
+export function urlHost(socket: { localAddress?: string; localPort?: number }): string
+{
+    let address = (socket.localAddress ?? "").replace(/%.*$/, "");
+    if (address.startsWith("::ffff:") && address.includes(".")) address = address.substring(7);
+    if (address === "" || !socket.localPort) return "";
+    return `${address.includes(":") ? `[${address}]` : address}:${socket.localPort}`;
+}
+
 export const DEFAULT_WEBSOCKET_ALLOWED_ORIGINS: readonly string[] = [
     "null",
     "file://",
@@ -102,8 +114,12 @@ export class TcpServer
     }
 
     /** Listen on all addresses, or only on loopback. Port 0 picks a free port */
+    /** Set if the server only accepts connections from this computer */
+    localhostOnly = false;
+
     async start(port: number, localhost_only: boolean): Promise<void>
     {
+        this.localhostOnly = localhost_only;
         if (port === PORT_SHARER_PORT) throw new RobotRaconteurError(MessageErrorType.InvalidArgument, "RobotRaconteur.InvalidArgument", "Port 48653 is reserved for the Robot Raconteur port sharer");
         try
         {
@@ -187,6 +203,7 @@ export class TcpServer
     private async attachStream(socket: Socket, head: Buffer): Promise<void>
     {
         const c = new ServerStreamConnection(this.parent);
+        c.urlHost = urlHost(socket);
         let events: SocketEvents | undefined;
         const open = async (e: SocketEvents): Promise<SocketAdapter> =>
         {
@@ -251,12 +268,14 @@ export class TcpServer
             httpError(socket, "403 Forbidden Origin");
             return;
         }
-        this.wss!.handleUpgrade(req, socket, head, (ws) => void this.attachWebSocket(ws));
+        this.wss!.handleUpgrade(req, socket, head, (ws) => void this.attachWebSocket(ws, urlHost(req.socket)));
     }
 
-    private async attachWebSocket(ws: WsLike & NodeJS.EventEmitter): Promise<void>
+    private async attachWebSocket(ws: WsLike & NodeJS.EventEmitter, host: string): Promise<void>
     {
         const c = new ServerStreamConnection(this.parent);
+        c.urlScheme = "rr+ws";
+        c.urlHost = host;
         const open = async (e: SocketEvents): Promise<SocketAdapter> =>
         {
             ws.on("message", (data: Buffer, is_binary: boolean) =>

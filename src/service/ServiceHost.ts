@@ -20,6 +20,7 @@ import { ServerContext, ServerEndpoint } from "./ServerContext.js";
 import { serviceError } from "./ServiceSkel.js";
 import type { ServiceObject } from "./ServiceSkel.js";
 import type { ServiceSecurityPolicy } from "./Security.js";
+import { SERVICE_INDEX_DEF, SERVICE_INDEX_NAME, ServiceIndexImpl } from "./ServiceIndex.js";
 import type { ServerTransportConnection } from "../transports/StreamConnections.js";
 
 declare module "robotraconteur"
@@ -37,10 +38,63 @@ declare module "robotraconteur"
         closeService(name: string): void;
         /** The names of the registered services. Added by robotraconteur-node */
         readonly registeredServiceNames: string[];
+        /**
+         * Changes whenever a service is registered or closed. Nodes announce it, so that
+         * discovery knows when to list their services again. Added by robotraconteur-node.
+         */
+        readonly serviceStateNonce: string;
     }
 }
 
 const hosts = new WeakMap<RobotRaconteurNode, Map<string, ServerContext>>();
+const nonces = new WeakMap<RobotRaconteurNode, string>();
+const service_listeners = new WeakMap<RobotRaconteurNode, Set<() => void>>();
+const indexes = new WeakMap<RobotRaconteurNode, ServiceIndexImpl>();
+
+function newNonce(): string
+{
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    return Array.from({ length: 16 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+}
+
+/** @internal Call a function whenever the node's services change */
+export function addServicesChangedListener(node: RobotRaconteurNode, f: () => void): void
+{
+    let s = service_listeners.get(node);
+    if (!s)
+    {
+        s = new Set();
+        service_listeners.set(node, s);
+    }
+    s.add(f);
+}
+
+/** @internal */
+export function removeServicesChangedListener(node: RobotRaconteurNode, f: () => void): void
+{
+    service_listeners.get(node)?.delete(f);
+}
+
+/** A service was registered or closed. The nonce changes, and clients and transports are told, as in Core */
+function servicesChanged(node: RobotRaconteurNode): void
+{
+    const old = nonces.get(node);
+    let n = newNonce();
+    while (n === old) n = newNonce();
+    nonces.set(node, n);
+    indexes.get(node)?.LocalNodeServicesChanged.fire();
+    for (const f of [...(service_listeners.get(node) ?? [])])
+    {
+        try
+        {
+            f();
+        }
+        catch (e)
+        {
+            console.error("Error in services changed listener:", e);
+        }
+    }
+}
 /** The text of service definitions registered from text, which services send to clients */
 const type_texts = new WeakMap<RobotRaconteurNode, Map<string, string>>();
 
@@ -341,14 +395,38 @@ RobotRaconteurNode.prototype.registerService = function (this: RobotRaconteurNod
 {
     if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name)) throw serviceError(MessageErrorType.InvalidArgument, "InvalidArgument", `Invalid service name: ${name}`);
     const s = services(this);
+    // Every node that serves anything serves the service index, which Core registers at startup
+    if (name !== SERVICE_INDEX_NAME && !s.has(SERVICE_INDEX_NAME))
+    {
+        this.registerServiceType(SERVICE_INDEX_DEF);
+        const index = new ServiceIndexImpl(this);
+        indexes.set(this, index);
+        this.registerService(SERVICE_INDEX_NAME, `${SERVICE_INDEX_NAME}.ServiceIndex`, index);
+    }
     s.get(name)?.close();
     const c = new ServerContext(this, name, objectType, obj, () =>
     {
-        if (s.get(name) === c) s.delete(name);
+        if (s.get(name) !== c) return;
+        s.delete(name);
+        servicesChanged(this);
     }, securityPolicy ?? null);
     s.set(name, c);
+    servicesChanged(this);
     return c;
 };
+
+Object.defineProperty(RobotRaconteurNode.prototype, "serviceStateNonce", {
+    get(this: RobotRaconteurNode): string
+    {
+        let n = nonces.get(this);
+        if (n === undefined)
+        {
+            n = newNonce();
+            nonces.set(this, n);
+        }
+        return n;
+    }
+});
 
 RobotRaconteurNode.prototype.getService = function (this: RobotRaconteurNode, name: string): ServerContext
 {
