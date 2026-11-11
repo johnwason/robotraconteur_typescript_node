@@ -63,6 +63,14 @@ subscription.close();
 
 A subscription keeps the program running until it is closed or `node.shutdown()` is called. Without a filter, it tries every service of the type, including any that need a password. A service that fails to connect 25 times in a row is dropped until it is announced again.
 
+A third argument sets the subscription's options, such as `connectRetryDelay` and `decodeOptions`. Decode options can receive large arrays of named arrays, such as point clouds, as typed array views, as described in the shared package's [Value types](https://johnwason.github.io/robotraconteur_typescript/documents/Value_types.html#large-arrays) page:
+
+```js
+const subscription = discovery.subscribeServiceByType("com.robotraconteur.pointcloud.sensor.PointCloudSensor", undefined, {
+    decodeOptions: { viewTypes: ["com.robotraconteur.pointcloud.PointCloudPointf"] }
+});
+```
+
 `discovery.subscribeServiceInfo2(types, filter)` tracks services without connecting to them, with `getDetectedServiceInfo2()`, `addServiceDetectedListener`, and `addServiceLostListener`.
 
 ## Filters
@@ -122,6 +130,8 @@ manager.updateSubscription({ name: "arm", urls: ["rr+tcp://localhost:52702?servi
 
 manager.close();
 ```
+
+A subscription's details can also include `decodeOptions`, which an update changes for its connected clients.
 
 ## Announcing services
 

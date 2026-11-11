@@ -164,6 +164,28 @@ For more control, set the server's `wireConnectCallback` or `pipeConnectCallback
 | `clientEndpoints`, `getClient(endpoint)` | The connected clients |
 | `addServerServiceListener(fn)` | Notifications when clients connect and disconnect |
 | `close()` | Stop the service and disconnect its clients |
+| `decodeOptions` | How values from clients are decoded, described below |
+| `newNamedArrayView(type, countOrArray)` | Create a view to send, described below |
+
+## Large arrays
+
+Arrays of named arrays, such as the points of a point cloud, are received as an `Array` of objects, which is slow for millions of elements. Set the service's `decodeOptions` to receive them as a `NamedArrayView` over the typed array that was received instead, as clients can:
+
+```js
+const context = node.registerService("sensor", "experimental.sensor.Sensor", sensor);
+context.decodeOptions = { viewTypes: ["com.robotraconteur.geometry.Vector3"] };
+```
+
+This applies to function parameters, property values, and wire and pipe values from clients. The node's `decodeOptions` are for its clients and do not change how services decode.
+
+A service can send a `NamedArrayView` wherever an array of its named array type is expected, without copying. `context.newNamedArrayView(type, countOrArray)` creates one, zeroed or over a typed array of the type's number type:
+
+```js
+const points = context.newNamedArrayView("com.robotraconteur.geometry.Vector3", 1000);
+points.array[0] = 1.5; // x of point 0
+```
+
+See the shared package's [Value types](https://johnwason.github.io/robotraconteur_typescript/documents/Value_types.html#large-arrays) page for the layout of a view.
 
 ## Not supported yet
 
