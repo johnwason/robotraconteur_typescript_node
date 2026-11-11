@@ -57,6 +57,9 @@ object testroot
     function uint32 current_endpoint()
     function int32 calls()
     function void release_o1()
+    function int32{generator} count_to(int32 n)
+    function double{generator} scale(double factor, double{generator} values)
+    function int32{generator} not_a_generator()
     event ev1(string message, double value)
     objref sub o1
     objref sub{int32} o2
@@ -178,6 +181,26 @@ export class TestRoot
         this.o1 = new Sub("o1 again");
         this.released_o1++;
         this.context!.releaseServicePath("test.o1");
+    }
+
+    async *count_to(n: number): AsyncGenerator<number>
+    {
+        for (let i = 0; i < n; i++)
+        {
+            await new Promise((r) => setImmediate(r));
+            yield i;
+        }
+    }
+
+    /** A generator in the Python form, without Close or Abort */
+    scale(factor: number): { Next(v: number): number }
+    {
+        return { Next: (v: number) => v * factor };
+    }
+
+    not_a_generator(): number
+    {
+        return 5;
     }
 
     get_o1(): Sub

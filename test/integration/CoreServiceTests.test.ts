@@ -49,10 +49,6 @@ const MASKED: Record<string, { pytest: string[]; client: string[] }> = {
         pytest: ["test_pipes"],
         client: ["ServiceTestClient TestPipes", "pipe flow control limits a broadcaster until packets are consumed"]
     },
-    generators: {
-        pytest: ["test_generators"],
-        client: ["ServiceTestClient2 TestGenerators", "ServiceTestClient2 TestGeneratorIteration"]
-    },
     callbacks: {
         pytest: ["test_callbacks"],
         client: ["ServiceTestClient TestCallbacks", "callbacks can be asynchronous", "callback failures are reported to the service"]

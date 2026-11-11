@@ -18,7 +18,7 @@ import { connect as netConnect } from "node:net";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { promisify } from "node:util";
-import { RobotRaconteurError, RobotRaconteurNode, VarValue } from "robotraconteur";
+import { GeneratorHandle, RobotRaconteurError, RobotRaconteurNode, VarValue } from "robotraconteur";
 import type { Endpoint, ITransportConnection, ServiceStub } from "robotraconteur";
 import { isWebSocketOriginAllowed, TcpTransport } from "../../src/index.js";
 import type { ServerContext } from "../../src/index.js";
@@ -149,6 +149,47 @@ describe("services", () =>
             {
                 assert.equal(await c.callFunction("current_endpoint"), c.context.remoteEndpoint);
                 assert.ok(context.clientEndpoints.includes(c.context.remoteEndpoint));
+            });
+
+            test("generators may be iterables, async generators, or objects with Next", async () =>
+            {
+                const values: number[] = [];
+                for await (const v of await c.callGenerator<number>("count_to", [4])) values.push(v);
+                assert.deepEqual(values, [0, 1, 2, 3]);
+
+                // A generator that has ended is destroyed, as in Core
+                const g = await c.callGenerator<number>("count_to", [1]);
+                assert.equal(await c.callFunctionGenNext(g), 0);
+                await assert.rejects(c.callFunctionGenNext(g), (e: RobotRaconteurError) => e.isStopIteration);
+                await assert.rejects(c.callFunctionGenNext(g), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidOperation");
+
+                const s = await c.callGenerator<number>("scale", [3]);
+                assert.equal(await c.callFunctionGenNext(s, 2), 6);
+                assert.equal(await c.callFunctionGenNext(s, -1.5), -4.5);
+                await c.callFunctionGenClose(s);
+                await assert.rejects(c.callFunctionGenNext(s, 1), (e: RobotRaconteurError) => e.isStopIteration);
+
+                const a = await c.callGenerator<number>("scale", [3]);
+                await c.callFunctionGenAbort(a);
+                await assert.rejects(c.callFunctionGenNext(a, 1), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.OperationAborted");
+
+                await assert.rejects(c.callGenerator("not_a_generator"), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidOperation");
+            });
+
+            test("a generator can only be used by the client that created it", async () =>
+            {
+                const g = await c.callGenerator<number>("count_to", [3]);
+                const other = await client.connectService(url(scheme));
+                try
+                {
+                    const stolen = new GeneratorHandle("count_to", g.index, { type: "int32" }, undefined, other);
+                    await assert.rejects(other.callFunctionGenNext(stolen), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidOperation");
+                    assert.equal(await c.callFunctionGenNext(g), 0);
+                }
+                finally
+                {
+                    await client.disconnectService(other);
+                }
             });
 
             test("objrefs return objects from get_ methods, with and without indexes", async () =>

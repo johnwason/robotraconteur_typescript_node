@@ -335,9 +335,9 @@ export class ServerContext
         case MessageEntryType.PropertySetReq:
             return (await this.getObjectSkel(m.servicePath)).setProperty(m);
         case MessageEntryType.FunctionCallReq:
-            return (await this.getObjectSkel(m.servicePath)).callFunction(m);
+            return (await this.getObjectSkel(m.servicePath)).callFunction(m, ep);
         case MessageEntryType.GeneratorNextReq:
-            throw serviceError(MessageErrorType.NotImplementedError, "NotImplementedError", "Generators are not yet supported by robotraconteur-node services");
+            return (await this.getObjectSkel(m.servicePath)).callGeneratorNext(m, ep);
         case MessageEntryType.WireConnectReq:
         case MessageEntryType.WireDisconnectReq:
         case MessageEntryType.WirePeekInValueReq:
@@ -418,6 +418,8 @@ export class ServerContext
         {
             if (now - c.lastMessageReceived > this.node.endpointInactivityTimeout) this.removeClient(c);
         }
+        const endpoints = new Set(this.clients.keys());
+        for (const s of this.skels.values()) s.cleanupGenerators(now, endpoints);
     }
 
     /** Disconnect the clients and stop serving. Clients are told the service has closed */

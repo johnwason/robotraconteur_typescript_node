@@ -4,7 +4,7 @@
 
 Node.js additions for the [robotraconteur](https://github.com/johnwason/robotraconteur_typescript) TypeScript client: the `rr+tcp` transport, services, and discovery of nodes and services on the network. Browsers cannot use TCP sockets or UDP, so these live in a separate package and the browser library stays small.
 
-**Status:** early development. The client side of TCP, TLS (`rrs+tcp`), WebSockets, discovery, and subscriptions by service type are implemented. Services support properties, functions, objrefs, and events, served over `rr+tcp` and `rr+ws`. Generators, wires, pipes, callbacks, memories, authentication, locks, TLS for services, announcing services for discovery, and the Local transport are not implemented yet.
+**Status:** early development. The client side of TCP, TLS (`rrs+tcp`), WebSockets, discovery, and subscriptions by service type are implemented. Services support properties, functions, generators, objrefs, and events, served over `rr+tcp` and `rr+ws`. Wires, pipes, callbacks, memories, authentication, locks, TLS for services, announcing services for discovery, and the Local transport are not implemented yet.
 
 Requires Node.js 22 or newer.
 
@@ -231,6 +231,7 @@ Some details follow Core and Python:
 
 - An objref's `get_` method returns the object, or `[object, type]` when the object's type is not the declared one. That form is required for `varobject`. Objects are kept once returned. Call `context.releaseServicePath(path)` to have the objref asked again.
 - Errors thrown by a method are returned to the client. Throw a `RobotRaconteurError` to choose its name, and to add `errorSubName` or `errorParam`. Other errors are returned as `RemoteError` with the JavaScript error name.
+- A generator function returns the generator: anything iterable, such as an array or the result of a `function*` or `async function*`, or an object with `Next(param)` and optionally `Close()` and `Abort()`, as in Python. A function that takes a generator parameter receives its values through `Next(param)`. A generator is destroyed when it ends or fails, 30 seconds after the client closes or aborts it, and after 10 minutes without use, as in Core.
 - `ServerEndpoint.current` is the client whose request is being served, including after `await` in the same request.
 - `registerService` returns the `ServerContext`, which holds the service `attributes` sent to clients, `addExtraImport`, `releaseServicePath`, and `close()`.
 

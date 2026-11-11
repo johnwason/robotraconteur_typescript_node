@@ -16,8 +16,8 @@
 
 // Port of Core's Python test service, test/python/RobotRaconteurTest/ServiceTest2.py. The fill
 // and verify functions are shared with the client tests in the robotraconteur package.
-// Generators, wires, and memories are not ported yet, because robotraconteur-node services do not
-// support them yet.
+// Wires and memories are not ported yet, because robotraconteur-node services do not support them
+// yet.
 
 import assert from "node:assert/strict";
 import { RobotRaconteurError, VarValue } from "robotraconteur";
@@ -88,6 +88,22 @@ export class testroot3_impl
     set teststruct3_prop(value: any)
     {
         st.ServiceTest2_verify_teststruct3(value, 858362);
+    }
+
+    *gen_func1(): Generator<number>
+    {
+        for (let i = 0; i < 16; i++) yield i;
+    }
+
+    gen_func2(name: string): number[][]
+    {
+        assert.equal(name, "gen_func2_a_param");
+        return Array.from({ length: 16 }, (_, i) => [i]);
+    }
+
+    gen_func4(): func4_gen
+    {
+        return new func4_gen();
     }
 
     get_o4(): [obj4_impl, string]
@@ -298,6 +314,32 @@ export class testroot3_impl
         err.errorSubName = "my_error2";
         err.errorParam = exceptionParams(30, "40");
         throw err;
+    }
+}
+
+/** A generator in the form Python uses, with Next, Abort, and Close */
+export class func4_gen
+{
+    private j = 0;
+    private aborted = false;
+
+    Next(v: Uint8Array): Uint8Array
+    {
+        if (this.aborted) throw new RobotRaconteurError(MessageErrorType.OperationAborted, "RobotRaconteur.OperationAborted", "");
+        if (this.j >= 8) throw new RobotRaconteurError(MessageErrorType.StopIteration, "RobotRaconteur.StopIteration", "");
+        const a = Uint8Array.from(v, (x) => x + this.j);
+        this.j++;
+        return a;
+    }
+
+    Abort(): void
+    {
+        this.aborted = true;
+    }
+
+    Close(): void
+    {
+        this.j = 1000;
     }
 }
 
