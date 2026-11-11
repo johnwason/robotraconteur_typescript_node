@@ -17,5 +17,32 @@
         "TcpServerParent",
         "DiscoverySubscriber"
     ],
-    "treatWarningsAsErrors": true
+    "treatWarningsAsErrors": true,
+    "readme": "README.md",
+    "projectDocuments": [
+        "docs/guide/getting-started.md",
+        "docs/guide/tls.md",
+        "docs/guide/discovery.md",
+        "docs/guide/services.md",
+        "docs/guide/security.md",
+        "docs/guide/web-servers.md"
+    ],
+    "navigation": {
+        "includeCategories": false,
+        "includeGroups": true
+    },
+    "highlightLanguages": [
+        "bash",
+        "console",
+        "css",
+        "html",
+        "javascript",
+        "json",
+        "jsonc",
+        "json5",
+        "yaml",
+        "tsx",
+        "typescript",
+        "nginx"
+    ]
 }
