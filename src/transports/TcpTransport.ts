@@ -24,11 +24,14 @@ import { join } from "node:path";
 import { connect as tlsConnect, TLSSocket } from "node:tls";
 import { parseConnectionUrl, RobotRaconteurError } from "robotraconteur";
 import type { Endpoint, ITransportConnection, RobotRaconteurNode, ServiceStub, Transport } from "robotraconteur";
-import { connectionError, MessageErrorType, StreamConnection } from "robotraconteur/internal";
+import { connectionError, MessageErrorType } from "robotraconteur/internal";
+import type { StreamConnection } from "robotraconteur/internal";
 import { TcpSocketAdapter, WebSocketAdapter, WEBSOCKET_PROTOCOL } from "./SocketAdapters.js";
 
 export { WebSocketAdapter };
-import type { SocketAdapter, SocketEvents, TlsStarter } from "robotraconteur/internal";
+import type { SocketAdapter, SocketEvents } from "robotraconteur/internal";
+import { TcpClientConnection } from "./StreamConnections.js";
+import type { StreamTlsOptions, TlsStarter } from "./StreamConnections.js";
 import { CertificateError, verifyNodeCertificate } from "./NodeCertificate.js";
 import { userConfigDir } from "./NodeDirectories.js";
 import { ROOT_CA_2015, ROOT_CA_2020 } from "./RootCertificates.js";
@@ -396,7 +399,6 @@ export class TcpTransport implements Transport, TcpServerParent
         if (u.host === "") throw connectionError("Invalid connection URL for TCP");
         if (this.requireTls && u.scheme !== "rrs+tcp") throw connectionError(`TLS is required, so ${u.scheme} cannot be used. Use rrs+tcp`);
 
-        const c = new StreamConnection(this, u.nodeid, u.nodename, endpoint);
         const websocket = u.scheme === "rr+ws" || u.scheme === "rr+wss";
         let start_tls: TlsStarter | undefined;
         const open = async (events: SocketEvents): Promise<SocketAdapter> =>
@@ -415,15 +417,12 @@ export class TcpTransport implements Transport, TcpServerParent
             return new TcpSocketAdapter(socket);
         };
 
-        if (u.scheme === "rrs+tcp")
-        {
-            // TLS starts after the socket opens, so the starter is looked up when it is needed
-            await c.connect(open, { start: (events, peer) => start_tls!(events, peer), mutualAuth: this.tlsOptions.clientCertificate !== undefined });
-        }
-        else
-        {
-            await c.connect(open);
-        }
+        // TLS starts after the socket opens, so the starter is looked up when it is needed
+        const tls: StreamTlsOptions | undefined = u.scheme === "rrs+tcp"
+            ? { start: (events, peer) => start_tls!(events, peer), mutualAuth: this.tlsOptions.clientCertificate !== undefined }
+            : undefined;
+        const c = new TcpClientConnection(this, u.nodeid, u.nodename, endpoint, tls);
+        await c.connect(open);
         this.connections.add(c);
         return c;
     }
@@ -473,10 +472,10 @@ export class TcpTransport implements Transport, TcpServerParent
         return [`rr+tcp://localhost:${port}?nodeid=${id}&service=${service}`];
     }
 
-    private connectionOf(client: ServiceStub): StreamConnection
+    private connectionOf(client: ServiceStub): TcpClientConnection
     {
-        const c = client.context.transportConnection as StreamConnection | null;
-        if (!c || !this.connections.has(c)) throw connectionError("The client is not connected using this transport");
+        const c = client.context.transportConnection;
+        if (!(c instanceof TcpClientConnection) || !this.connections.has(c)) throw connectionError("The client is not connected using this transport");
         return c;
     }
 

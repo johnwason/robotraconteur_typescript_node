@@ -17,10 +17,12 @@ import { createServer } from "node:net";
 import type { AddressInfo, Server, Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { RobotRaconteurError } from "robotraconteur";
-import { MessageErrorType, StreamConnection } from "robotraconteur/internal";
+import { MessageErrorType } from "robotraconteur/internal";
+import type { StreamConnection } from "robotraconteur/internal";
 import type { SocketAdapter, SocketEvents, StreamTransportParent } from "robotraconteur/internal";
 import { TcpSocketAdapter, WebSocketAdapter, WEBSOCKET_PROTOCOL } from "./SocketAdapters.js";
 import type { WsLike } from "./SocketAdapters.js";
+import { ServerStreamConnection } from "./StreamConnections.js";
 
 /** The port of the Robot Raconteur port sharer, which a service must not listen on */
 const PORT_SHARER_PORT = 48653;
@@ -184,7 +186,7 @@ export class TcpServer
     /** Serve the stream protocol over a socket, giving it the bytes read to identify the protocol */
     private async attachStream(socket: Socket, head: Buffer): Promise<void>
     {
-        const c = new StreamConnection(this.parent);
+        const c = new ServerStreamConnection(this.parent);
         let events: SocketEvents | undefined;
         const open = async (e: SocketEvents): Promise<SocketAdapter> =>
         {
@@ -254,7 +256,7 @@ export class TcpServer
 
     private async attachWebSocket(ws: WsLike & NodeJS.EventEmitter): Promise<void>
     {
-        const c = new StreamConnection(this.parent);
+        const c = new ServerStreamConnection(this.parent);
         const open = async (e: SocketEvents): Promise<SocketAdapter> =>
         {
             ws.on("message", (data: Buffer, is_binary: boolean) =>

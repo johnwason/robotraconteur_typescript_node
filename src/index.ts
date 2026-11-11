@@ -18,6 +18,7 @@ export { EventHook } from "./service/EventHook.js";
 export { ServerContext, ServerEndpoint } from "./service/ServerContext.js";
 export type { ServerServiceListener } from "./service/ServerContext.js";
 export type { ServiceObject } from "./service/ServiceSkel.js";
+export type { ServerTransportConnection } from "./transports/StreamConnections.js";
 import "./service/ServiceHost.js";
 export type { TlsClientOptions, WebSocketClientOptions } from "./transports/TcpTransport.js";
 export { CertificateError, verifyNodeCertificate } from "./transports/NodeCertificate.js";

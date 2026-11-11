@@ -13,7 +13,8 @@
 // limitations under the License.
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { Endpoint, NodeID, VarValue, RobotRaconteurNode, ServerTransportConnection, ServiceDefinition, TypeDefinition } from "robotraconteur";
+import type { Endpoint, NodeID, VarValue, RobotRaconteurNode, ServiceDefinition, TypeDefinition } from "robotraconteur";
+import type { ServerTransportConnection } from "../transports/StreamConnections.js";
 import { DataTypes, errorToEntry, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, packElement, TypeContext } from "robotraconteur/internal";
 import { serviceError, ServiceSkel } from "./ServiceSkel.js";
 import type { ServiceObject } from "./ServiceSkel.js";
@@ -171,6 +172,12 @@ export class ServerContext
         if (i < 0) return false;
         this.extra_imports.splice(i, 1);
         return true;
+    }
+
+    /** The connected client with a local endpoint number, if any */
+    getClient(local_endpoint: number): ServerEndpoint | undefined
+    {
+        return this.clients.get(local_endpoint);
     }
 
     /** The local endpoint numbers of the connected clients */

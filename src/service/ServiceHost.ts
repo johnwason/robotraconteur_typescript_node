@@ -13,11 +13,13 @@
 // limitations under the License.
 
 import { RobotRaconteurNode } from "robotraconteur";
-import type { ServerTransportConnection, ServiceDefinition, TypeDefinition } from "robotraconteur";
+import type { ServiceDefinition, TypeDefinition } from "robotraconteur";
+import { verifyServiceDefinitionOrder } from "robotraconteur/validators";
 import { DataTypes, errorReturnMessage, findElement, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, packElement, TypeContext } from "robotraconteur/internal";
 import { ServerContext, ServerEndpoint } from "./ServerContext.js";
 import { serviceError } from "./ServiceSkel.js";
 import type { ServiceObject } from "./ServiceSkel.js";
+import type { ServerTransportConnection } from "../transports/StreamConnections.js";
 
 declare module "robotraconteur"
 {
@@ -38,6 +40,8 @@ declare module "robotraconteur"
 }
 
 const hosts = new WeakMap<RobotRaconteurNode, Map<string, ServerContext>>();
+/** The text of service definitions registered from text, which services send to clients */
+const type_texts = new WeakMap<RobotRaconteurNode, Map<string, string>>();
 
 function services(node: RobotRaconteurNode): Map<string, ServerContext>
 {
@@ -46,7 +50,6 @@ function services(node: RobotRaconteurNode): Map<string, ServerContext>
     {
         s = new Map();
         hosts.set(node, s);
-        node.specialRequestHandler = (m, connection) => specialRequest(node, m, connection);
         node.addShutdownHook(() =>
         {
             for (const c of [...s!.values()]) c.close();
@@ -65,7 +68,7 @@ function findService(node: RobotRaconteurNode, name: string): ServerContext
 /** The text of a registered service definition, which is sent to clients */
 function definitionText(node: RobotRaconteurNode, name: string): string
 {
-    const t = node.serviceTypeTexts.get(name);
+    const t = type_texts.get(node)?.get(name);
     if (t === undefined)
     {
         if (node.serviceTypes.has(name)) throw serviceError(MessageErrorType.ServiceError, "ServiceError", `Service type ${name} was not registered from its text`);
@@ -121,8 +124,11 @@ function connectClient(node: RobotRaconteurNode, c: ServerContext, m: Message, c
     return ep;
 }
 
-/** Answer requests to the node itself, as Core's RobotRaconteurNode::SpecialRequest */
-async function specialRequest(node: RobotRaconteurNode, m: Message, connection: ServerTransportConnection): Promise<Message | null>
+/**
+ * Answer a request to the node itself, which a client sends before it has an endpoint, as Core's
+ * RobotRaconteurNode::SpecialRequest
+ */
+export async function specialRequest(node: RobotRaconteurNode, m: Message, connection: ServerTransportConnection): Promise<Message | null>
 {
     const h = m.header;
     const for_node = (h.receiverNodeID.isAnyNode && (h.receiverNodeName === "" || h.receiverNodeName === node.nodeName)) || h.receiverNodeID.equals(node.nodeID);
@@ -200,10 +206,11 @@ async function specialRequest(node: RobotRaconteurNode, m: Message, connection: 
         case MessageEntryType.DisconnectClient:
             try
             {
-                const ep = node.getEndpoint(h.receiverEndpoint);
-                const name = findElement(e.elements, "servicename")?.castString();
-                if (!(ep instanceof ServerEndpoint) || ep.context.serviceName !== name) throw new Error("Invalid endpoint");
-                ep.context.removeClient(ep);
+                const name = findElement(e.elements, "servicename")?.castString() ?? "";
+                const c = findService(node, name);
+                const ep = c.getClient(h.receiverEndpoint);
+                if (!ep) throw new Error("Invalid endpoint");
+                c.removeClient(ep);
             }
             catch
             {
@@ -287,6 +294,24 @@ async function connectClientCombined(node: RobotRaconteurNode, e: MessageEntry, 
         setError(r, MessageErrorType.ServiceNotFound, "RobotRaconteur.ServiceNotFoundException", "Service not found");
     }
 }
+
+// Services send clients the text of their service definitions, so the text is kept. Core rejects
+// definitions with entries out of order, so they are checked here as Core's node does
+const register_service_type = RobotRaconteurNode.prototype.registerServiceType;
+RobotRaconteurNode.prototype.registerServiceType = function (this: RobotRaconteurNode, def: string | ServiceDefinition): ServiceDefinition
+{
+    if (typeof def === "string") verifyServiceDefinitionOrder(def);
+    const d = register_service_type.call(this, def);
+    let texts = type_texts.get(this);
+    if (!texts)
+    {
+        texts = new Map();
+        type_texts.set(this, texts);
+    }
+    if (typeof def === "string") texts.set(d.name, def);
+    else texts.delete(d.name);
+    return d;
+};
 
 RobotRaconteurNode.prototype.registerService = function (this: RobotRaconteurNode, name: string, objectType: string, obj: ServiceObject): ServerContext
 {
