@@ -165,6 +165,7 @@ function issues(issuer: X509Certificate, c: X509Certificate): boolean
     return c.checkIssued(issuer) && c.verify(issuer.publicKey);
 }
 
+/** Options for verifyNodeCertificate */
 export interface NodeCertificateOptions
 {
     /** Root certificates to trust */

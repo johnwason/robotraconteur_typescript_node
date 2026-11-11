@@ -24,6 +24,13 @@ import { callHandler, directionOf, memberError, Waiters } from "./Wire.js";
 
 const MAX_PACKET_NUMBER = 0xffffffff;
 
+/** A packet from tryReceivePacketWait, which returns null instead of throwing */
+export interface PipePacketOf<T>
+{
+    /** The packet */
+    value: T;
+}
+
 function nextPacketNumber(n: number): number
 {
     return n < MAX_PACKET_NUMBER ? n + 1 : 0;
@@ -46,13 +53,18 @@ export class PipeServer<T = unknown>
     readonly unreliable: boolean;
     private endpoints = new Map<string, PipeEndpoint<T>>();
 
-    /** @internal */
+    /**
+     * @internal Created by the node for each pipe member
+     *
+     * @param member The pipe member's definition
+     */
     constructor(private skel: ServiceSkel, readonly member: MemberDefinition)
     {
         this.direction = directionOf(member);
         this.unreliable = member.modifiers?.includes("unreliable") ?? false;
     }
 
+    /** The name of the pipe member */
     get memberName(): string
     {
         return this.member.name;
@@ -235,6 +247,7 @@ export class PipeEndpoint<T = unknown>
     requestPacketAck = false;
     /** Drop packets the client sends */
     ignoreReceivedPackets = false;
+    /** True once the endpoint has closed */
     closed = false;
 
     private send_number = 0;
@@ -243,7 +256,14 @@ export class PipeEndpoint<T = unknown>
     private out_of_order = new Map<number, T>();
     private waiters = new Waiters();
 
-    /** @internal */
+    /**
+     * @internal Created when a client connects an endpoint
+     *
+     * @param index The endpoint index, which tells several endpoints of one client apart
+     * @param endpoint The local endpoint number of the client
+     * @param unreliable Whether packets may be lost or arrive out of order
+     * @param direction Which way packets go, as the service sees it
+     */
     constructor(private pipe: PipeServer<T>, readonly index: number, readonly endpoint: number, readonly unreliable: boolean, readonly direction: MemberDirection) {}
 
     /** The number of packets waiting to be received */
@@ -306,7 +326,7 @@ export class PipeEndpoint<T = unknown>
     }
 
     /** Take the next packet if there is one within the timeout, or return null */
-    async tryReceivePacketWait(timeout = -1): Promise<{ value: T } | null>
+    async tryReceivePacketWait(timeout = -1): Promise<PipePacketOf<T> | null>
     {
         this.checkRead();
         if (this.queue.length === 0 && !this.closed && timeout !== 0) await this.waiters.wait(timeout);
@@ -397,7 +417,10 @@ export class PipeBroadcaster<T = unknown>
 
     private endpoints: BroadcastEndpoint[] = [];
 
-    /** maximumBacklog is the number of unacknowledged packets allowed per endpoint. -1 for no limit */
+    /**
+     * @param pipe The pipe member, from the service object. The broadcaster sets its connect callback
+     * @param maxBacklog Packets an endpoint may have unacknowledged before it is skipped, or -1 for no limit
+     */
     constructor(readonly pipe: PipeServer<T>, public maxBacklog = -1)
     {
         if (!(pipe instanceof PipeServer)) throw memberError(MessageErrorType.InvalidArgument, "InvalidArgument", "Pipe must be the PipeServer of a service object");

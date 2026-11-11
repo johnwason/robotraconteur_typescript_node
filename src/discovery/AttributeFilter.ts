@@ -14,6 +14,7 @@
 
 import { VarValue } from "robotraconteur";
 
+/** How the conditions of a group combine, as in Core */
 export type ServiceSubscriptionFilterAttributeGroupOperation = "or" | "and" | "nor" | "nand";
 
 const NAME_REGEX = "(?:[a-zA-Z](?:[a-zA-Z0-9_]*[a-zA-Z0-9])?)(?:\\.[a-zA-Z](?:[a-zA-Z0-9_]*[a-zA-Z0-9])?)*";
@@ -35,7 +36,9 @@ export class ServiceSubscriptionFilterAttribute
 {
     /** The key to match in a map attribute. Empty matches any key, but only a list or string value otherwise */
     name = "";
+    /** The value to match exactly, if valueRegex is not set */
     value = "";
+    /** A regular expression the whole value must match */
     valueRegex: RegExp | null = null;
 
     /** Use (value) or (name, value). A value can be a string or a regular expression */
@@ -146,12 +149,19 @@ export function createServiceSubscriptionFilterAttributeIdentifier(a: string, b:
 /** Combines attributes and nested groups using an operation. An empty "or" or "and" group matches */
 export class ServiceSubscriptionFilterAttributeGroup
 {
+    /** The values to match */
     attributes: ServiceSubscriptionFilterAttribute[] = [];
+    /** Nested groups */
     groups: ServiceSubscriptionFilterAttributeGroup[] = [];
     /** Treat a string attribute as a list of values separated by the delimiter */
     splitStringAttribute = true;
+    /** The separator of values in a string attribute */
     splitStringDelimiter = ",";
 
+    /**
+     * @param operation How the attributes and groups combine
+     * @param items Attributes and groups to match
+     */
     constructor(public operation: ServiceSubscriptionFilterAttributeGroupOperation = "or", items: (ServiceSubscriptionFilterAttribute | ServiceSubscriptionFilterAttributeGroup)[] = [])
     {
         for (const i of items)

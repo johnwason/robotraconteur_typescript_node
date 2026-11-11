@@ -20,9 +20,13 @@ import type { NodeStorage, ServiceInfo2 } from "./NodeDiscovery.js";
 /** A node allowed by a filter. Leave nodeID and nodeName unset to match any node */
 export interface ServiceSubscriptionFilterNode
 {
+    /** The node's ID */
     nodeID?: NodeID;
+    /** The node's name */
     nodeName?: string;
+    /** The username to log in to the node's services with */
     username?: string;
+    /** The credentials to log in with, such as `{ password: new VarValue("...", "string") }` */
     credentials?: Map<string, unknown> | Record<string, unknown>;
 }
 
@@ -31,6 +35,7 @@ export interface ServiceSubscriptionFilter
 {
     /** Allowed nodes, and the credentials to use for them */
     nodes?: ServiceSubscriptionFilterNode[];
+    /** Allowed service names */
     serviceNames?: string[];
     /** Allowed URL schemes, for example "rr+tcp" */
     transportSchemes?: string[];
@@ -44,7 +49,7 @@ export interface ServiceSubscriptionFilter
     maxConnections?: number;
 }
 
-/** Receives updates from discovery */
+/** @internal Receives updates from discovery */
 export interface DiscoverySubscriber
 {
     nodeUpdated(storage: NodeStorage): void;
@@ -96,6 +101,7 @@ export function filterService(types: string[], filter: ServiceSubscriptionFilter
     return { urls, node };
 }
 
+/** Called with a service a ServiceInfo2Subscription has found or lost */
 export type ServiceInfo2Handler = (subscription: ServiceInfo2Subscription, info: ServiceInfo2) => unknown;
 
 function serviceKey(info: ServiceInfo2): string
@@ -119,21 +125,25 @@ export class ServiceInfo2Subscription implements DiscoverySubscriber
         return [...this.services.values()];
     }
 
+    /** Call a function when a matching service is found */
     addServiceDetectedListener(listener: ServiceInfo2Handler): void
     {
         this.detected_listeners.add(listener);
     }
 
+    /** Stop calling a function added with addServiceDetectedListener */
     removeServiceDetectedListener(listener: ServiceInfo2Handler): void
     {
         this.detected_listeners.delete(listener);
     }
 
+    /** Call a function when a matching service is lost */
     addServiceLostListener(listener: ServiceInfo2Handler): void
     {
         this.lost_listeners.add(listener);
     }
 
+    /** Stop calling a function added with addServiceLostListener */
     removeServiceLostListener(listener: ServiceInfo2Handler): void
     {
         this.lost_listeners.delete(listener);
@@ -166,6 +176,7 @@ export class ServiceInfo2Subscription implements DiscoverySubscriber
         }
     }
 
+    /** @internal Called by discovery when a node's services are listed */
     nodeUpdated(storage: NodeStorage): void
     {
         if (this.closed || !storage.services) return;
@@ -182,11 +193,13 @@ export class ServiceInfo2Subscription implements DiscoverySubscriber
         this.removeNode(storage.info.nodeID, current);
     }
 
+    /** @internal Called by discovery when a node is lost */
     nodeLost(storage: NodeStorage): void
     {
         if (!this.closed) this.removeNode(storage.info.nodeID, new Set());
     }
 
+    /** Stop reporting services */
     close(): void
     {
         if (this.closed) return;

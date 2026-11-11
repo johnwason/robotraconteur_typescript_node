@@ -29,9 +29,17 @@ export function authenticationError(message: string): RobotRaconteurError
 /** A user that a client has logged in as */
 export class AuthenticatedUser
 {
+    /** When the user logged in */
     readonly loginTime = new Date();
+    /** When the user last made a request */
     lastAccessTime = new Date();
 
+    /**
+     * @param username The user name
+     * @param privileges What the user may do, such as objectlock and objectlockoverride
+     * @param properties Other information about the user, chosen by the authenticator
+     * @param context The service the user logged in to
+     */
     constructor(readonly username: string, readonly privileges: string[] = [], readonly properties: string[] = [], readonly context: ServerContext | null = null) {}
 
     /** @internal */
@@ -48,6 +56,7 @@ export class AuthenticatedUser
  */
 export interface UserAuthenticator
 {
+    /** Check the username and credentials, returning the user, or throwing if they are not valid */
     authenticateUser(username: string, credentials: Map<string, VarValue>, context: ServerContext, connection: ServerTransportConnection | null): AuthenticatedUser | Promise<AuthenticatedUser>;
 }
 
@@ -86,6 +95,7 @@ export class PasswordFileUserAuthenticator implements UserAuthenticator
         return createHash("md5").update(password, "utf8").digest("hex");
     }
 
+    /** Check the password, and the client's verified node ID if required */
     authenticateUser(username: string, credentials: Map<string, VarValue>, context: ServerContext, connection: ServerTransportConnection | null = null): AuthenticatedUser
     {
         const u = this.users.get(username);
@@ -110,5 +120,9 @@ export class PasswordFileUserAuthenticator implements UserAuthenticator
  */
 export class ServiceSecurityPolicy
 {
+    /**
+     * @param authenticator Checks the username and credentials of clients
+     * @param policies Core's policies, such as `{ requirevaliduser: "true", allowobjectlock: "true" }`
+     */
     constructor(readonly authenticator: UserAuthenticator, readonly policies: Record<string, string> = {}) {}
 }

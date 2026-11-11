@@ -115,6 +115,7 @@ export interface ServerTransportConnection extends ITransportConnection
     readonly securePeerIdentity: NodeID | null;
     /** Notify the endpoint when the connection closes */
     attachEndpoint(e: Endpoint): void;
+    /** Stop notifying the endpoint */
     detachEndpoint(e: Endpoint): void;
 }
 
