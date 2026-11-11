@@ -18,7 +18,7 @@ import { connect as netConnect } from "node:net";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { promisify } from "node:util";
-import { RobotRaconteurError, RobotRaconteurNode, VarValue } from "robotraconteur";
+import { GeneratorHandle, RobotRaconteurError, RobotRaconteurNode, VarValue } from "robotraconteur";
 import type { Endpoint, ITransportConnection, ServiceStub } from "robotraconteur";
 import { isWebSocketOriginAllowed, TcpTransport } from "../../src/index.js";
 import type { ServerContext } from "../../src/index.js";
@@ -135,7 +135,6 @@ describe("services", () =>
                 });
                 await assert.rejects(c.callFunction("fail_plain", ["oops"]), (e: RobotRaconteurError) => e.errorName === "TypeError" && e.message === "oops");
                 await assert.rejects(c.getProperty("nothing"), RobotRaconteurError);
-                await assert.rejects(c.peekWireInValue("w"), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.NotImplementedError");
             });
 
             test("events are sent to the client", async () =>
@@ -149,6 +148,106 @@ describe("services", () =>
             {
                 assert.equal(await c.callFunction("current_endpoint"), c.context.remoteEndpoint);
                 assert.ok(context.clientEndpoints.includes(c.context.remoteEndpoint));
+            });
+
+            test("generators may be iterables, async generators, or objects with Next", async () =>
+            {
+                const values: number[] = [];
+                for await (const v of await c.callGenerator<number>("count_to", [4])) values.push(v);
+                assert.deepEqual(values, [0, 1, 2, 3]);
+
+                // A generator that has ended is destroyed, as in Core
+                const g = await c.callGenerator<number>("count_to", [1]);
+                assert.equal(await c.callFunctionGenNext(g), 0);
+                await assert.rejects(c.callFunctionGenNext(g), (e: RobotRaconteurError) => e.isStopIteration);
+                await assert.rejects(c.callFunctionGenNext(g), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidOperation");
+
+                const s = await c.callGenerator<number>("scale", [3]);
+                assert.equal(await c.callFunctionGenNext(s, 2), 6);
+                assert.equal(await c.callFunctionGenNext(s, -1.5), -4.5);
+                await c.callFunctionGenClose(s);
+                await assert.rejects(c.callFunctionGenNext(s, 1), (e: RobotRaconteurError) => e.isStopIteration);
+
+                const a = await c.callGenerator<number>("scale", [3]);
+                await c.callFunctionGenAbort(a);
+                await assert.rejects(c.callFunctionGenNext(a, 1), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.OperationAborted");
+
+                await assert.rejects(c.callGenerator("not_a_generator"), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidOperation");
+            });
+
+            test("callbacks call the function set by the client", async () =>
+            {
+                await assert.rejects(c.callFunction("call_cb_add", [1, 2]), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidOperation");
+                c.setCallback("cb_add", async (a: number, b: number) => a + b + 0.5);
+                assert.equal(await c.callFunction("call_cb_add", [1, 2]), 3.5);
+                c.setCallback("cb_add", () =>
+                {
+                    throw new RobotRaconteurError(18, "RobotRaconteur.InvalidArgument", "no thanks");
+                });
+                await assert.rejects(c.callFunction("call_cb_add", [1, 2]), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidArgument" && e.message === "no thanks");
+                await assert.rejects(c.callFunction("call_cb_endpoint", [987654]), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidArgument");
+            });
+
+            test("wires send values with WireBroadcaster and receive them with WireUnicastReceiver", async () =>
+            {
+                const named = (name: string) => (e: RobotRaconteurError) => e.errorName === "RobotRaconteur." + name;
+                await c.callFunction("reset_wires");
+                await assert.rejects(c.peekWireInValue("w"), named("ValueNotSet"));
+                await c.callFunction("set_w", [2.5]);
+                assert.equal((await c.peekWireInValue("w")).value, 2.5);
+                await assert.rejects(c.pokeWireOutValue("w", 1), named("ReadOnlyMember"));
+
+                // A client that connects receives the current value, then each new one
+                const w = await c.connectWire("w");
+                assert.ok(await c.waitWireInValueValid(w, 5000));
+                assert.equal(c.getWireInValue(w).value, 2.5);
+                const next = new Promise<unknown>((resolve) => c.addWireValueChangedListener(w, (_h, v) => resolve(v)));
+                await c.callFunction("set_w", [3.5]);
+                assert.equal(await next, 3.5);
+                await c.closeWire(w);
+
+                await assert.rejects(c.callFunction("get_wpoke"), named("ValueNotSet"));
+                await assert.rejects(c.peekWireInValue("wpoke"), named("WriteOnlyMember"));
+                await c.pokeWireOutValue("wpoke", 4);
+                assert.equal(await c.callFunction("get_wpoke"), 4);
+                assert.equal((await c.peekWireOutValue("wpoke")).value, 4);
+                const wp = await c.connectWire("wpoke");
+                c.setWireOutValue(wp, 5);
+                await new Promise((r) => setTimeout(r, 200));
+                assert.equal(await c.callFunction("get_wpoke"), 5);
+                await c.closeWire(wp);
+            });
+
+            test("pipe endpoints get indexes as in Core, and the service can close them", async () =>
+            {
+                const p1 = await c.connectPipe("pp");
+                const p2 = await c.connectPipe("pp");
+                assert.deepEqual([c.getPipeIndex(p1), c.getPipeIndex(p2)], [1, 2]);
+                // Core moves a requested index past the ones the client already uses
+                const p3 = await c.connectPipe("pp", 2);
+                assert.equal(c.getPipeIndex(p3), 3);
+                await c.sendPipePacket(p1, 21);
+                assert.equal(await c.receivePipePacketWait(p1, 5000), 42);
+
+                const closed = new Promise<void>((resolve) => c.setPipeCloseCallback(p2, () => resolve()));
+                assert.equal(await c.callFunction("close_pipes"), 3);
+                await closed;
+            });
+
+            test("a generator can only be used by the client that created it", async () =>
+            {
+                const g = await c.callGenerator<number>("count_to", [3]);
+                const other = await client.connectService(url(scheme));
+                try
+                {
+                    const stolen = new GeneratorHandle("count_to", g.index, { type: "int32" }, undefined, other);
+                    await assert.rejects(other.callFunctionGenNext(stolen), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidOperation");
+                    assert.equal(await c.callFunctionGenNext(g), 0);
+                }
+                finally
+                {
+                    await client.disconnectService(other);
+                }
             });
 
             test("objrefs return objects from get_ methods, with and without indexes", async () =>

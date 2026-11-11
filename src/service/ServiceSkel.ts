@@ -15,8 +15,15 @@
 import { RobotRaconteurError } from "robotraconteur";
 import type { EntryDefinition, MemberDefinition, MemberKind, ServiceDefinition, TypeDefinition } from "robotraconteur";
 import { DataTypes, getElement, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, packElement, unpackElement } from "robotraconteur/internal";
+import { Callback } from "./Callback.js";
 import { EventHook } from "./EventHook.js";
-import type { ServerContext } from "./ServerContext.js";
+import { GENERATOR_CLOSED_TIMEOUT, GENERATOR_IDLE_TIMEOUT, toServiceGenerator } from "./Generators.js";
+import type { ServiceGenerator } from "./Generators.js";
+import type { ServerContext, ServerEndpoint } from "./ServerContext.js";
+import { Monitor } from "./Locks.js";
+import type { ObjectLock } from "./Locks.js";
+import { PipeServer } from "./Pipe.js";
+import { WireServer } from "./Wire.js";
 
 /** A service object, whose members are accessed by name as in Python */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -32,9 +39,26 @@ function notImplemented(message: string): RobotRaconteurError
     return serviceError(MessageErrorType.NotImplementedError, "NotImplementedError", message);
 }
 
-function isGenerator(m: MemberDefinition): boolean
+function isGeneratorType(t: TypeDefinition | undefined): boolean
 {
-    return m.type?.container === "generator" || (m.parameters ?? []).some((p) => p.type.container === "generator");
+    return t?.container === "generator";
+}
+
+/** The type of the values of a generator */
+function itemType(t: TypeDefinition): TypeDefinition
+{
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { container, ...item } = t;
+    return item;
+}
+
+interface GeneratorEntry
+{
+    generator: ServiceGenerator;
+    endpoint: number;
+    member: MemberDefinition;
+    /** The generator is destroyed if it is not used again by this time */
+    expires: number;
 }
 
 /**
@@ -48,9 +72,15 @@ export class ServiceSkel
     readonly entry: EntryDefinition;
     /** Set once the service has released the object */
     released = false;
+    /** The object lock on the object, if any */
+    objectLock: ObjectLock | null = null;
+    readonly monitor: Monitor;
 
     private members: Map<string, MemberDefinition>;
     private events: [EventHook, (...args: unknown[]) => void][] = [];
+    private generators = new Map<number, GeneratorEntry>();
+    private wires = new Map<string, WireServer>();
+    private pipes = new Map<string, PipeServer>();
 
     constructor(readonly context: ServerContext, readonly servicePath: string, readonly obj: ServiceObject, readonly objectType: string)
     {
@@ -62,13 +92,51 @@ export class ServiceSkel
         this.def = def;
         this.entry = entry;
         this.members = new Map(entry.members.map((m) => [m.name, m]));
+        this.monitor = new Monitor(this);
     }
 
-    /** Connect the events of the object and let it initialize, as Python's RRServiceObjectInit */
+    /**
+     * Whether a request may use the object while it is locked: members marked nolock, and reading
+     * properties marked nolockread, as in Core
+     */
+    isRequestNoLock(e: MessageEntry): boolean
+    {
+        const m = this.members.get(e.memberName);
+        if (!m) return false;
+        if (m.modifiers?.includes("nolock")) return true;
+        return m.kind === "property" && m.modifiers?.includes("nolockread") === true && e.entryType === MessageEntryType.PropertyGetReq;
+    }
+
+    /**
+     * Connect the events of the object, put a Callback on each callback member, and let it
+     * initialize, as Python's RRServiceObjectInit
+     */
     init(): void
     {
         for (const m of this.entry.members)
         {
+            if (m.kind === "wire")
+            {
+                // Assigned as Python does, so a setter on the object can keep it
+                const w = new WireServer(this, m);
+                this.wires.set(m.name, w);
+                this.obj[m.name] = w;
+                continue;
+            }
+            if (m.kind === "pipe")
+            {
+                const p = new PipeServer(this, m);
+                this.pipes.set(m.name, p);
+                this.obj[m.name] = p;
+                continue;
+            }
+            if (m.kind === "callback")
+            {
+                const cb = this.obj[m.name] as unknown;
+                if (cb === undefined || cb === null) this.obj[m.name] = new Callback(this, m);
+                else if (!(cb instanceof Callback)) throw serviceError(MessageErrorType.InvalidArgument, "InvalidArgument", `Callback ${m.name} of ${this.objectType} must not be set by the object`);
+                continue;
+            }
             if (m.kind !== "event") continue;
             let hook = this.obj[m.name] as unknown;
             if (hook === undefined || hook === null)
@@ -90,6 +158,59 @@ export class ServiceSkel
         this.released = true;
         for (const [hook, handler] of this.events) hook.removeHandler(handler);
         this.events = [];
+        this.generators.clear();
+        for (const w of this.wires.values()) w.shutdown();
+        for (const p of this.pipes.values()) p.shutdown();
+        this.monitor.shutdown();
+    }
+
+    /** A client disconnected. Its wire connections and pipe endpoints are closed */
+    clientDisconnected(endpoint: number): void
+    {
+        for (const w of this.wires.values()) w.clientDisconnected(endpoint);
+        for (const p of this.pipes.values()) p.clientDisconnected(endpoint);
+        this.monitor.clientDisconnected(endpoint);
+    }
+
+    /** A pipe request: connect or disconnect an endpoint */
+    pipeCommand(e: MessageEntry, ep: ServerEndpoint): Promise<MessageEntry>
+    {
+        this.member(e.memberName, "pipe");
+        return this.pipes.get(e.memberName)!.command(e, ep);
+    }
+
+    /** Packets sent by a client on its pipe endpoints */
+    pipePacketReceived(e: MessageEntry, ep: ServerEndpoint): void
+    {
+        this.pipes.get(e.memberName)?.packetReceived(e, ep);
+    }
+
+    /** Acknowledgements from a client of pipe packets the service sent */
+    pipeAckReceived(e: MessageEntry, ep: ServerEndpoint): void
+    {
+        this.pipes.get(e.memberName)?.ackReceived(e, ep);
+    }
+
+    /** A wire request: connect, disconnect, peek, or poke */
+    wireCommand(e: MessageEntry, ep: ServerEndpoint): Promise<MessageEntry>
+    {
+        this.member(e.memberName, "wire");
+        return this.wires.get(e.memberName)!.command(e, ep);
+    }
+
+    /** A value sent by a client on a wire connection */
+    wirePacketReceived(e: MessageEntry, ep: ServerEndpoint): void
+    {
+        this.wires.get(e.memberName)?.packetReceived(e, ep.localEndpoint);
+    }
+
+    /** Destroy generators that have not been used for a while, or that belong to a client that left */
+    cleanupGenerators(now: number, endpoints?: ReadonlySet<number>): void
+    {
+        for (const [i, g] of this.generators)
+        {
+            if (now > g.expires || (endpoints && !endpoints.has(g.endpoint))) this.generators.delete(i);
+        }
     }
 
     private member(name: string, kind: MemberKind): MemberDefinition
@@ -99,12 +220,12 @@ export class ServiceSkel
         return m;
     }
 
-    private pack(name: string, t: TypeDefinition, v: unknown): MessageElement
+    pack(name: string, t: TypeDefinition, v: unknown): MessageElement
     {
         return packElement(name, t, v, this.def, this.context.types);
     }
 
-    private unpack(e: MessageElement, t: TypeDefinition): unknown
+    unpack(e: MessageElement, t: TypeDefinition): unknown
     {
         return unpackElement(e, t, this.def, this.context.types);
     }
@@ -128,19 +249,84 @@ export class ServiceSkel
         return new MessageEntry(MessageEntryType.PropertySetRes, m.name);
     }
 
-    async callFunction(e: MessageEntry): Promise<MessageEntry>
+    /**
+     * Call a function. A generator function, which returns a generator or takes one as its last
+     * parameter, is called without that parameter and returns the generator. The client then
+     * steps it with GeneratorNextReq
+     */
+    async callFunction(e: MessageEntry, ep: ServerEndpoint): Promise<MessageEntry>
     {
         const m = this.member(e.memberName, "function");
-        if (isGenerator(m)) throw notImplemented("Generator functions are not yet supported by robotraconteur-node services");
         const f = this.obj[m.name] as unknown;
         if (typeof f !== "function") throw notImplemented(`Function ${m.name} is not implemented`);
-        const args = (m.parameters ?? []).map((p) => this.unpack(getElement(e.elements, p.name), p.type));
+        const params = m.parameters ?? [];
+        const generator_param = isGeneratorType(params[params.length - 1]?.type);
+        const decl = generator_param ? params.slice(0, -1) : params;
+        const args = decl.map((p) => this.unpack(getElement(e.elements, p.name), p.type));
         const ret: unknown = await f.apply(this.obj, args);
 
         const r = new MessageEntry(MessageEntryType.FunctionCallRes, m.name);
-        if (m.type!.type === "void") r.addElement(new MessageElement("return", DataTypes.void_t, null));
+        if (generator_param || isGeneratorType(m.type))
+        {
+            const index = this.addGenerator(toServiceGenerator(ret, m.name), m, ep);
+            r.addElement(new MessageElement("index", DataTypes.int32_t, Int32Array.of(index)));
+        }
+        else if (m.type!.type === "void") r.addElement(new MessageElement("return", DataTypes.void_t, null));
         else r.addElement(this.pack("return", m.type!, ret));
         return r;
+    }
+
+    private addGenerator(generator: ServiceGenerator, member: MemberDefinition, ep: ServerEndpoint): number
+    {
+        let index: number;
+        do
+        {
+            index = Math.floor(Math.random() * 0x7fffffff);
+        } while (this.generators.has(index));
+        this.generators.set(index, { generator, endpoint: ep.localEndpoint, member, expires: Date.now() + GENERATOR_IDLE_TIMEOUT });
+        return index;
+    }
+
+    /**
+     * Step a generator, or close or abort it when the request carries StopIteration or another
+     * error, as Core does. The generator is destroyed when it reports an error, including
+     * StopIteration at its end, and shortly after it is closed or aborted.
+     */
+    async callGeneratorNext(e: MessageEntry, ep: ServerEndpoint): Promise<MessageEntry>
+    {
+        const index = (getElement(e.elements, "index").data as Int32Array)[0]!;
+        const g = this.generators.get(index);
+        if (!g || g.endpoint !== ep.localEndpoint || g.member.name !== e.memberName)
+        {
+            throw serviceError(MessageErrorType.InvalidOperation, "InvalidOperation", "Invalid generator");
+        }
+        g.expires = Date.now() + (e.error === MessageErrorType.None ? GENERATOR_IDLE_TIMEOUT : GENERATOR_CLOSED_TIMEOUT);
+
+        const r = new MessageEntry(MessageEntryType.GeneratorNextRes, e.memberName);
+        try
+        {
+            if (e.error !== MessageErrorType.None)
+            {
+                if (e.error === MessageErrorType.StopIteration) await g.generator.close();
+                else await g.generator.abort();
+                r.addElement(new MessageElement("return", DataTypes.int32_t, Int32Array.of(0)));
+                return r;
+            }
+
+            const params = g.member.parameters ?? [];
+            const param_type = params[params.length - 1]?.type;
+            const param = isGeneratorType(param_type) ? this.unpack(getElement(e.elements, "parameter"), itemType(param_type!)) : undefined;
+            const v = await g.generator.next(param);
+            const ret_type = g.member.type!;
+            if (isGeneratorType(ret_type)) r.addElement(this.pack("return", itemType(ret_type), v));
+            else r.addElement(new MessageElement("return", DataTypes.int32_t, Int32Array.of(0)));
+            return r;
+        }
+        catch (err)
+        {
+            this.generators.delete(index);
+            throw err;
+        }
     }
 
     /**

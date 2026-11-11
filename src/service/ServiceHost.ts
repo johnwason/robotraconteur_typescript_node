@@ -13,12 +13,13 @@
 // limitations under the License.
 
 import { RobotRaconteurNode } from "robotraconteur";
-import type { ServiceDefinition, TypeDefinition } from "robotraconteur";
+import type { ServiceDefinition, TypeDefinition, VarValue } from "robotraconteur";
 import { verifyServiceDefinitionOrder } from "robotraconteur/validators";
-import { DataTypes, errorReturnMessage, findElement, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, packElement, TypeContext } from "robotraconteur/internal";
+import { DataTypes, errorReturnMessage, findElement, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, packElement, TypeContext, unpackElement } from "robotraconteur/internal";
 import { ServerContext, ServerEndpoint } from "./ServerContext.js";
 import { serviceError } from "./ServiceSkel.js";
 import type { ServiceObject } from "./ServiceSkel.js";
+import type { ServiceSecurityPolicy } from "./Security.js";
 import type { ServerTransportConnection } from "../transports/StreamConnections.js";
 
 declare module "robotraconteur"
@@ -29,7 +30,7 @@ declare module "robotraconteur"
          * Serve an object to clients as a service. The object's members are used by name as in
          * Python. Registering a name again replaces the service. Added by robotraconteur-node.
          */
-        registerService(name: string, objectType: string, obj: ServiceObject): ServerContext;
+        registerService(name: string, objectType: string, obj: ServiceObject, securityPolicy?: ServiceSecurityPolicy): ServerContext;
         /** The service registered with a name. Added by robotraconteur-node */
         getService(name: string): ServerContext;
         /** Stop a service and disconnect its clients. Added by robotraconteur-node */
@@ -92,6 +93,7 @@ function serviceDefinitions(node: RobotRaconteurNode, c: ServerContext): string[
 }
 
 const STRING_LIST: TypeDefinition = { type: "string", container: "list" };
+const VARVALUE_MAP: TypeDefinition = { type: "varvalue", container: "map_string" };
 const NO_SCOPE = { name: "" } as ServiceDefinition;
 const NO_TYPES = new TypeContext(new Map());
 
@@ -161,6 +163,8 @@ export async function specialRequest(node: RobotRaconteurNode, m: Message, conne
             try
             {
                 const c = findService(node, e.servicePath.split(".")[0]!);
+                // Only the root object is open to clients that have not logged in, as in Core
+                if (c.requireValidUser && e.servicePath !== c.serviceName) throw new Error("Not authenticated");
                 const type = await c.getObjectType(e.servicePath);
                 r.addElement(MessageElement.string("objecttype", type));
                 const implemented = c.objectImplements(type);
@@ -279,20 +283,40 @@ async function connectClientCombined(node: RobotRaconteurNode, e: MessageEntry, 
         console.warn("Could not add attributes to client connect return message:", err);
     }
 
-    if (findElement(e.elements, "username"))
-    {
-        setError(r, MessageErrorType.AuthenticationError, "RobotRaconteur.AuthenticationError", "Authentication not enabled for service");
-        return;
-    }
-
+    let ep: ServerEndpoint;
     try
     {
-        ret.header.senderEndpoint = connectClient(node, c, m, connection).localEndpoint;
+        ep = connectClient(node, c, m, connection);
     }
     catch
     {
         setError(r, MessageErrorType.ServiceNotFound, "RobotRaconteur.ServiceNotFoundException", "Service not found");
+        return;
     }
+
+    // Log the client in as Core does. Without a valid user, the client is not connected
+    try
+    {
+        const username = findElement(e.elements, "username");
+        const credentials = findElement(e.elements, "credentials");
+        if (c.requireValidUser)
+        {
+            if (!username) throw new Error("Username not provided");
+            if (!credentials) throw new Error("Credentials not provided");
+            await ep.authenticateUser(username.castString(), unpackElement(credentials, VARVALUE_MAP, NO_SCOPE, NO_TYPES) as Map<string, VarValue>);
+        }
+        else if (username && credentials)
+        {
+            throw new Error("Authentication not enabled for service");
+        }
+    }
+    catch
+    {
+        c.removeClient(ep);
+        setError(r, MessageErrorType.AuthenticationError, "RobotRaconteur.AuthenticationError", "Authentication Failed");
+        return;
+    }
+    ret.header.senderEndpoint = ep.localEndpoint;
 }
 
 // Services send clients the text of their service definitions, so the text is kept. Core rejects
@@ -313,7 +337,7 @@ RobotRaconteurNode.prototype.registerServiceType = function (this: RobotRaconteu
     return d;
 };
 
-RobotRaconteurNode.prototype.registerService = function (this: RobotRaconteurNode, name: string, objectType: string, obj: ServiceObject): ServerContext
+RobotRaconteurNode.prototype.registerService = function (this: RobotRaconteurNode, name: string, objectType: string, obj: ServiceObject, securityPolicy?: ServiceSecurityPolicy): ServerContext
 {
     if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name)) throw serviceError(MessageErrorType.InvalidArgument, "InvalidArgument", `Invalid service name: ${name}`);
     const s = services(this);
@@ -321,7 +345,7 @@ RobotRaconteurNode.prototype.registerService = function (this: RobotRaconteurNod
     const c = new ServerContext(this, name, objectType, obj, () =>
     {
         if (s.get(name) === c) s.delete(name);
-    });
+    }, securityPolicy ?? null);
     s.set(name, c);
     return c;
 };

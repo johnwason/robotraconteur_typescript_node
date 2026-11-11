@@ -15,8 +15,8 @@
 // A service implemented in TypeScript, for testing the server with TypeScript and Core clients.
 
 import { RobotRaconteurError, VarValue } from "robotraconteur";
-import { EventHook, ServerEndpoint } from "../../src/index.js";
-import type { ServerContext } from "../../src/index.js";
+import { EventHook, ServerEndpoint, WireBroadcaster, WireUnicastReceiver } from "../../src/index.js";
+import type { Callback, PipeEndpoint, PipeServer, ServerContext, WireServer } from "../../src/index.js";
 
 export const TEST_SERVICE_DEF = `## A service for testing robotraconteur-node services
 service experimental.ts_service_test
@@ -57,6 +57,12 @@ object testroot
     function uint32 current_endpoint()
     function int32 calls()
     function void release_o1()
+    function int32{generator} count_to(int32 n)
+    function double{generator} scale(double factor, double{generator} values)
+    function int32{generator} not_a_generator()
+    callback double cb_add(double a, double b)
+    function double call_cb_add(double a, double b)
+    function void call_cb_endpoint(uint32 endpoint)
     event ev1(string message, double value)
     objref sub o1
     objref sub{int32} o2
@@ -64,6 +70,12 @@ object testroot
     objref varobject o4
     objref sub missing
     wire double w [readonly]
+    wire double wpoke [writeonly]
+    pipe double pp
+    function void reset_wires()
+    function void set_w(double v)
+    function double get_wpoke()
+    function int32 close_pipes()
 end
 
 object sub
@@ -107,6 +119,13 @@ export class TestRoot
     v1: VarValue | null = new VarValue("a string", "string");
     smap = new Map([["a", "x"]]);
     ev1!: EventHook<[string, number]>;
+    cb_add!: Callback<number>;
+    w!: WireServer<number>;
+    wpoke!: WireServer<number>;
+    private w_b!: WireBroadcaster<number>;
+    private wpoke_r!: WireUnicastReceiver<number>;
+    private pp_server: PipeServer<number> | null = null;
+    private pp_endpoints: PipeEndpoint<number>[] = [];
     w1_value = 0;
     context: ServerContext | null = null;
     private o1 = new Sub("o1");
@@ -121,6 +140,50 @@ export class TestRoot
     RRServiceObjectInit(context: ServerContext): void
     {
         this.context = context;
+        this.reset_wires();
+    }
+
+    /** New helpers for the wires, so that each test starts without values */
+    reset_wires(): void
+    {
+        this.w_b = new WireBroadcaster(this.w);
+        this.wpoke_r = new WireUnicastReceiver(this.wpoke);
+    }
+
+    set_w(v: number): void
+    {
+        this.w_b.outValue = v;
+    }
+
+    get_wpoke(): number
+    {
+        return this.wpoke_r.inValue;
+    }
+
+    get pp(): PipeServer<number> | null
+    {
+        return this.pp_server;
+    }
+
+    set pp(p: PipeServer<number>)
+    {
+        this.pp_server = p;
+        p.pipeConnectCallback = (e) =>
+        {
+            this.pp_endpoints.push(e);
+            e.packetReceivedEvent.addHandler(async (x) =>
+            {
+                while (x.available > 0) await x.sendPacket(x.receivePacket() * 2);
+            });
+        };
+    }
+
+    close_pipes(): number
+    {
+        const n = this.pp_server!.activeEndpoints.length;
+        for (const e of this.pp_endpoints) e.close();
+        this.pp_endpoints = [];
+        return n;
     }
 
     add(a: number, b: number): number
@@ -178,6 +241,36 @@ export class TestRoot
         this.o1 = new Sub("o1 again");
         this.released_o1++;
         this.context!.releaseServicePath("test.o1");
+    }
+
+    async *count_to(n: number): AsyncGenerator<number>
+    {
+        for (let i = 0; i < n; i++)
+        {
+            await new Promise((r) => setImmediate(r));
+            yield i;
+        }
+    }
+
+    /** A generator in the Python form, without Close or Abort */
+    scale(factor: number): { Next(v: number): number }
+    {
+        return { Next: (v: number) => v * factor };
+    }
+
+    not_a_generator(): number
+    {
+        return 5;
+    }
+
+    call_cb_add(a: number, b: number): Promise<number>
+    {
+        return this.cb_add.getClientFunction(ServerEndpoint.current!)(a, b);
+    }
+
+    async call_cb_endpoint(endpoint: number): Promise<void>
+    {
+        await this.cb_add.getClientFunction(endpoint)(1, 2);
     }
 
     get_o1(): Sub

@@ -4,7 +4,7 @@
 
 Node.js additions for the [robotraconteur](https://github.com/johnwason/robotraconteur_typescript) TypeScript client: the `rr+tcp` transport, services, and discovery of nodes and services on the network. Browsers cannot use TCP sockets or UDP, so these live in a separate package and the browser library stays small.
 
-**Status:** early development. The client side of TCP, TLS (`rrs+tcp`), WebSockets, discovery, and subscriptions by service type are implemented. Services support properties, functions, objrefs, and events, served over `rr+tcp` and `rr+ws`. Generators, wires, pipes, callbacks, memories, authentication, locks, TLS for services, announcing services for discovery, and the Local transport are not implemented yet.
+**Status:** early development. The client side of TCP, TLS (`rrs+tcp`), WebSockets, discovery, and subscriptions by service type are implemented. Services support properties, functions, generators, objrefs, events, callbacks, wires, pipes, authentication, and object and monitor locks, served over `rr+tcp` and `rr+ws`. Memories, TLS for services, announcing services for discovery, and the Local transport are not implemented yet.
 
 Requires Node.js 22 or newer.
 
@@ -231,6 +231,11 @@ Some details follow Core and Python:
 
 - An objref's `get_` method returns the object, or `[object, type]` when the object's type is not the declared one. That form is required for `varobject`. Objects are kept once returned. Call `context.releaseServicePath(path)` to have the objref asked again.
 - Errors thrown by a method are returned to the client. Throw a `RobotRaconteurError` to choose its name, and to add `errorSubName` or `errorParam`. Other errors are returned as `RemoteError` with the JavaScript error name.
+- A generator function returns the generator: anything iterable, such as an array or the result of a `function*` or `async function*`, or an object with `Next(param)` and optionally `Close()` and `Abort()`, as in Python. A function that takes a generator parameter receives its values through `Next(param)`. A generator is destroyed when it ends or fails, 30 seconds after the client closes or aborts it, and after 10 minutes without use, as in Core.
+- The node puts a `Callback` on each callback member. `this.cb.getClientFunction(ServerEndpoint.current)` returns an async function that calls the callback the client has set, as Python's `GetClientFunction`. It also accepts a client's local endpoint number. The call fails with the client's error, if the client disconnects, or after the node's `requestTimeout`.
+- The node puts a `WireServer` on each wire member and a `PipeServer` on each pipe member, by assigning it, so a setter on the object can keep it as in Python. Most services pass it to a helper: `new WireBroadcaster(wire)` sends `outValue` to every client, `new WireUnicastReceiver(wire)` keeps the `inValue` from the latest client and fires `inValueChanged`, and `new PipeBroadcaster(pipe, maximumBacklog)` sends each packet to every endpoint with Core's flow control. For more control, set `wireConnectCallback` or `pipeConnectCallback`, which receive a `WireConnection` (`inValue`, `outValue`, `wireValueChanged`) or a `PipeEndpoint` (`sendPacket`, `receivePacket`, `packetReceivedEvent`). Wire peeks and pokes go to `peekInValueCallback`, `peekOutValueCallback`, and `pokeOutValueCallback`.
+- To require clients to log in, pass a `ServiceSecurityPolicy` to `registerService`: `new ServiceSecurityPolicy(new PasswordFileUserAuthenticator(text), { requirevaliduser: "true", allowobjectlock: "true" })`. The text is Core's password file format, one `username md5-of-password privileges` line per user. Any object with `authenticateUser(username, credentials, context)` can be the authenticator. `ServerEndpoint.currentAuthenticatedUser` is the user of the request being served.
+- Clients with the `objectlock` privilege can lock objects for their user or their session, and `objectlockoverride` can release other users' locks. Members marked `nolock` or `nolockread` stay usable. The service can lock an object itself with `context.requestObjectLock(path, "server")`. Monitor locks give one client at a time an object. They need no privilege, and an object's `RobotRaconteurMonitorEnter(timeout)` and `RobotRaconteurMonitorExit()` methods are called if it has them, as in Python.
 - `ServerEndpoint.current` is the client whose request is being served, including after `await` in the same request.
 - `registerService` returns the `ServerContext`, which holds the service `attributes` sent to clients, `addExtraImport`, `releaseServicePath`, and `close()`.
 
@@ -252,6 +257,8 @@ RR_TEST_SERVER_SCRIPT=test/server/rr_cpp_test_server.py ./scripts/podman-run.sh 
 ```
 
 The tests reuse the shared package's client test suite over `rr+tcp` and `rr+ws`, against Core's Python test server by default or its C++ test server when selected as above. `npm run test:extra` connects to public test servers, as Core's extra tests do, so it needs internet access and is not part of `npm test`. It also tests `rrs+tcp` with real node certificates when `RR_NODE_CERTIFICATES` is set to a folder of two or more `{nodeid}.p12` files. Those include private keys, so they are not in this repository. The other `rrs+tcp` tests use a certificate authority made with openssl during the test.
+
+Services are tested with ports of Core's Python test services in `test/service`, which read the same test vector blob as Core. Both the shared package's client tests and Core's own Python test clients run against them (`test/integration/CoreServiceTests.test.ts`). Core's clients come from the Core commit that the blob comes from, which the image and CI check out and `RR_CORE_PYTHON_TESTS` points to. Tests of features that services do not support yet are masked there by feature (Core's with `pytest -k`), so each new feature turns its tests on by removing its mask.
 
 ## License
 
