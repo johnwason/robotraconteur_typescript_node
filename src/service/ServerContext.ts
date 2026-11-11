@@ -17,6 +17,7 @@ import { RobotRaconteurError } from "robotraconteur";
 import type { Endpoint, NodeID, VarValue, RobotRaconteurNode, ServiceDefinition, TypeDefinition } from "robotraconteur";
 import type { ServerTransportConnection } from "../transports/StreamConnections.js";
 import { DataTypes, errorToEntry, getElement, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, packElement, TypeContext, unpackElement } from "robotraconteur/internal";
+import { ObjectLock, objectLockedError } from "./Locks.js";
 import { authenticationError, PERMISSION_DENIED } from "./Security.js";
 import type { AuthenticatedUser, ServiceSecurityPolicy } from "./Security.js";
 import { serviceError, ServiceSkel } from "./ServiceSkel.js";
@@ -217,6 +218,8 @@ export class ServerContext
     readonly types: TypeContext;
 
     private skels = new Map<string, ServiceSkel>();
+    /** Object locks by the path of the locked object */
+    private object_locks = new Map<string, ObjectLock>();
     private pending_skels = new Map<string, Promise<ServiceSkel>>();
     private clients = new Map<number, ServerEndpoint>();
     private extra_imports: string[] = [];
@@ -368,6 +371,8 @@ export class ServerContext
                     const { obj, type } = await parent.getSubObj(seg.name, seg.index);
                     if (parent.released) throw serviceError(MessageErrorType.ObjectNotFound, "ObjectNotFound", "Object has been released");
                     const s = new ServiceSkel(this, p, obj, type);
+                    // Objects under a locked object are locked too
+                    parent.objectLock?.add(s);
                     this.skels.set(p, s);
                     s.init();
                     return s;
@@ -382,6 +387,26 @@ export class ServerContext
     async getObjectType(path: string): Promise<string>
     {
         return (await this.getObjectSkel(path)).objectType;
+    }
+
+    /**
+     * Release the locks of a client that disconnected, as Core does: its client locks, and its
+     * user's locks if no other client of the user is connected
+     */
+    private releaseClientLocks(ep: ServerEndpoint): void
+    {
+        const username = ep.authenticatedUser?.username;
+        if (username === undefined) return;
+        const last = ![...this.clients.values()].some((c) => c.authenticatedUser?.username === username);
+        for (const [path, lock] of [...this.object_locks])
+        {
+            if (lock.username !== username) continue;
+            if (lock.endpoint === ep.localEndpoint || (lock.endpoint === 0 && last))
+            {
+                lock.release();
+                this.object_locks.delete(path);
+            }
+        }
     }
 
     /** The object types an object type implements */
@@ -465,31 +490,121 @@ export class ServerContext
                 return r;
             }
         case MessageEntryType.PropertyGetReq:
-            return (await this.getObjectSkel(m.servicePath)).getProperty(m);
+            return (await this.lockedSkel(m, ep)).getProperty(m);
         case MessageEntryType.PropertySetReq:
-            return (await this.getObjectSkel(m.servicePath)).setProperty(m);
+            return (await this.lockedSkel(m, ep)).setProperty(m);
         case MessageEntryType.FunctionCallReq:
-            return (await this.getObjectSkel(m.servicePath)).callFunction(m, ep);
+            return (await this.lockedSkel(m, ep)).callFunction(m, ep);
         case MessageEntryType.GeneratorNextReq:
-            return (await this.getObjectSkel(m.servicePath)).callGeneratorNext(m, ep);
+            return (await this.lockedSkel(m, ep)).callGeneratorNext(m, ep);
         case MessageEntryType.WireConnectReq:
         case MessageEntryType.WireDisconnectReq:
         case MessageEntryType.WirePeekInValueReq:
         case MessageEntryType.WirePeekOutValueReq:
         case MessageEntryType.WirePokeOutValueReq:
-            return (await this.getObjectSkel(m.servicePath)).wireCommand(m, ep);
+            return (await this.lockedSkel(m, ep)).wireCommand(m, ep);
         case MessageEntryType.WirePacket:
             this.skels.get(m.servicePath)?.wirePacketReceived(m, ep);
             return null;
         case MessageEntryType.PipeConnectReq:
         case MessageEntryType.PipeDisconnectReq:
-            return (await this.getObjectSkel(m.servicePath)).pipeCommand(m, ep);
+            return (await this.lockedSkel(m, ep)).pipeCommand(m, ep);
         case MessageEntryType.PipePacket:
             this.skels.get(m.servicePath)?.pipePacketReceived(m, ep);
             return null;
         default:
             throw serviceError(MessageErrorType.ProtocolError, "ProtocolError", "Unknown transaction type");
         }
+    }
+
+    /** The object a request is for, failing if it is locked by another user or client, as Core's check_lock */
+    private async lockedSkel(m: MessageEntry, ep: ServerEndpoint): Promise<ServiceSkel>
+    {
+        const skel = await this.getObjectSkel(m.servicePath);
+        skel.monitor.check(ep.localEndpoint);
+        const lock = skel.objectLock;
+        if (!lock || skel.isRequestNoLock(m)) return skel;
+        const user = ep.authenticatedUser?.username;
+        if (user === lock.username && (lock.endpoint === 0 || lock.endpoint === ep.localEndpoint)) return skel;
+        throw objectLockedError("Object locked by " + lock.username);
+    }
+
+    /**
+     * Lock an object and the objects under it for a user, as Core's RequestObjectLock. With an
+     * endpoint, only that client of the user may use them. A service can lock an object itself,
+     * with a username no client logs in as, such as "server".
+     */
+    async requestObjectLock(path: string, username: string, endpoint = 0): Promise<void>
+    {
+        const skel = await this.getObjectSkel(path);
+        const under = [...this.skels.entries()].filter(([p]) => p === path || p.startsWith(path + "."));
+        if (skel.objectLock || under.some(([, s]) => s.objectLock)) throw objectLockedError("Object already locked");
+        const lock = new ObjectLock(username, path, endpoint);
+        for (const [, s] of under) lock.add(s);
+        this.object_locks.set(path, lock);
+    }
+
+    /**
+     * Release the lock on an object, as Core's ReleaseObjectLock. Only the user that locked it may,
+     * or with a client lock that client, unless override is set
+     */
+    async releaseObjectLock(path: string, username: string, override = false, endpoint = 0): Promise<void>
+    {
+        const skel = await this.getObjectSkel(path);
+        const lock = skel.objectLock;
+        if (!lock) return;
+        if (lock.rootPath !== path) throw objectLockedError("Cannot release inherited lock");
+        if (username !== lock.username && !override) throw objectLockedError("Service locked by user " + lock.username);
+        if (lock.endpoint !== 0 && endpoint !== lock.endpoint && username !== lock.username && !override) throw objectLockedError("Service locked by other session");
+        lock.release();
+        this.object_locks.delete(path);
+    }
+
+    /** The user that has locked an object, or an empty string */
+    async getObjectLockUsername(path: string): Promise<string>
+    {
+        return (await this.getObjectSkel(path)).objectLock?.username ?? "";
+    }
+
+    private async clientLockOp(m: MessageEntry, ep: ServerEndpoint): Promise<MessageEntry>
+    {
+        const r = new MessageEntry(MessageEntryType.ClientSessionOpRet, m.memberName);
+        const ret = (s: string) => r.addElement(MessageElement.string("return", s));
+        const path = m.servicePath;
+        if (m.memberName.startsWith("Monitor"))
+        {
+            const skel = await this.getObjectSkel(path);
+            const endpoint = ep.localEndpoint;
+            if (m.memberName === "MonitorEnter") ret(await skel.monitor.enter(endpoint, (getElement(m.elements, "timeout").data as Int32Array)[0]!));
+            else if (m.memberName === "MonitorContinueEnter") ret(await skel.monitor.continueEnter(endpoint));
+            else if (m.memberName === "MonitorExit")
+            {
+                const s = await skel.monitor.exit(endpoint);
+                if (s !== null) ret(s);
+            }
+            else throw serviceError(MessageErrorType.InvalidOperation, "InvalidOperation", "Invalid command");
+            return r;
+        }
+
+        const user = ep.authenticatedUser;
+        if (!user) throw serviceError(PERMISSION_DENIED, "PermissionDenied", "User must be authenticated to lock object");
+        if (!user.privileges.includes("objectlock") && !user.privileges.includes("objectlockoverride")) throw objectLockedError("User does not have object locking privileges");
+        switch (m.memberName)
+        {
+        case "RequestObjectLock":
+            await this.requestObjectLock(path, user.username);
+            break;
+        case "RequestClientObjectLock":
+            await this.requestObjectLock(path, user.username, ep.localEndpoint);
+            break;
+        case "ReleaseObjectLock":
+            await this.releaseObjectLock(path, user.username, user.privileges.includes("objectlockoverride"), ep.localEndpoint);
+            break;
+        default:
+            throw serviceError(MessageErrorType.InvalidOperation, "InvalidOperation", "Invalid command");
+        }
+        ret("OK");
+        return r;
     }
 
     private async clientSessionOp(m: MessageEntry, ep: ServerEndpoint): Promise<MessageEntry>
@@ -523,7 +638,7 @@ export class ServerContext
         case "MonitorEnter":
         case "MonitorContinueEnter":
         case "MonitorExit":
-            throw serviceError(MessageErrorType.NotImplementedError, "NotImplementedError", `${m.memberName} is not yet supported by robotraconteur-node services`);
+            return this.clientLockOp(m, ep);
         default:
             throw serviceError(MessageErrorType.ProtocolError, "ProtocolError", "Invalid ClientSessionOp command");
         }
@@ -541,6 +656,7 @@ export class ServerContext
     {
         if (!this.clients.delete(ep.localEndpoint)) return;
         ep.failPendingRequests();
+        this.releaseClientLocks(ep);
         for (const s of this.skels.values()) s.clientDisconnected(ep.localEndpoint);
         ep.connection.detachEndpoint(ep);
         this.node.deleteEndpoint(ep);
@@ -568,6 +684,12 @@ export class ServerContext
         {
             this.skels.get(p)!.release();
             this.skels.delete(p);
+            const lock = this.object_locks.get(p);
+            if (lock)
+            {
+                lock.release();
+                this.object_locks.delete(p);
+            }
         }
         const e = new MessageEntry(MessageEntryType.ServicePathReleasedReq, "");
         e.servicePath = path;

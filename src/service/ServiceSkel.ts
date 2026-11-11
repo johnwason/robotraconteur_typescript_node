@@ -20,6 +20,8 @@ import { EventHook } from "./EventHook.js";
 import { GENERATOR_CLOSED_TIMEOUT, GENERATOR_IDLE_TIMEOUT, toServiceGenerator } from "./Generators.js";
 import type { ServiceGenerator } from "./Generators.js";
 import type { ServerContext, ServerEndpoint } from "./ServerContext.js";
+import { Monitor } from "./Locks.js";
+import type { ObjectLock } from "./Locks.js";
 import { PipeServer } from "./Pipe.js";
 import { WireServer } from "./Wire.js";
 
@@ -70,6 +72,9 @@ export class ServiceSkel
     readonly entry: EntryDefinition;
     /** Set once the service has released the object */
     released = false;
+    /** The object lock on the object, if any */
+    objectLock: ObjectLock | null = null;
+    readonly monitor: Monitor;
 
     private members: Map<string, MemberDefinition>;
     private events: [EventHook, (...args: unknown[]) => void][] = [];
@@ -87,6 +92,19 @@ export class ServiceSkel
         this.def = def;
         this.entry = entry;
         this.members = new Map(entry.members.map((m) => [m.name, m]));
+        this.monitor = new Monitor(this);
+    }
+
+    /**
+     * Whether a request may use the object while it is locked: members marked nolock, and reading
+     * properties marked nolockread, as in Core
+     */
+    isRequestNoLock(e: MessageEntry): boolean
+    {
+        const m = this.members.get(e.memberName);
+        if (!m) return false;
+        if (m.modifiers?.includes("nolock")) return true;
+        return m.kind === "property" && m.modifiers?.includes("nolockread") === true && e.entryType === MessageEntryType.PropertyGetReq;
     }
 
     /**
@@ -143,6 +161,7 @@ export class ServiceSkel
         this.generators.clear();
         for (const w of this.wires.values()) w.shutdown();
         for (const p of this.pipes.values()) p.shutdown();
+        this.monitor.shutdown();
     }
 
     /** A client disconnected. Its wire connections and pipe endpoints are closed */
@@ -150,6 +169,7 @@ export class ServiceSkel
     {
         for (const w of this.wires.values()) w.clientDisconnected(endpoint);
         for (const p of this.pipes.values()) p.clientDisconnected(endpoint);
+        this.monitor.clientDisconnected(endpoint);
     }
 
     /** A pipe request: connect or disconnect an endpoint */

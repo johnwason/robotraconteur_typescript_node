@@ -35,18 +35,16 @@ import { loadVectors, PYTHON } from "./TestServer.js";
  * is tested by removing its mask. pytest tests are given by function name.
  */
 const MASKED: Record<string, { pytest: string[]; client: string[] }> = {
+    // test_nolock ends with memories. ServiceTestClient2 TestNoLock covers the rest of it
     memories: {
         pytest: [
+            "test_nolock",
             "test_memories",
             "test_named_array_memories",
             "test_complex_memories",
             "test_bool_memories"
         ],
         client: []
-    },
-    locks: {
-        pytest: ["test_object_lock", "test_monitor_lock", "test_nolock", "test_async"],
-        client: ["ServiceTestClient2 TestNoLock"]
     }
 };
 

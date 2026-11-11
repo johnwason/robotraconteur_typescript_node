@@ -56,7 +56,8 @@ export async function startTestServiceNode(): Promise<TestServiceNode>
     const policy = new ServiceSecurityPolicy(new PasswordFileUserAuthenticator(authdata), { requirevaliduser: "true", allowobjectlock: "true" });
     node.registerService("RobotRaconteurTestService_auth", "com.robotraconteur.testing.TestService1.testroot", new testroot_impl(), policy);
 
-    node.registerService("RobotRaconteurTestService2", "com.robotraconteur.testing.TestService3.testroot3", new testroot3_impl());
+    const c2 = node.registerService("RobotRaconteurTestService2", "com.robotraconteur.testing.TestService3.testroot3", new testroot3_impl());
+    await c2.requestObjectLock("RobotRaconteurTestService2.nolock_test", "server");
     node.registerService("RobotRaconteurTestService3", "com.robotraconteur.testing.TestService5.asynctestroot", new asynctestroot_impl());
 
     return {
