@@ -13,7 +13,7 @@ env:
   PYTHON_VERSION: "3.12"
   RR_CORE_VERSION: v1.2.9
   # The branch of the shared package to build and test against
-  RR_SHARED_REF: server
+  RR_SHARED_REF: dev
 
 jobs:
   test:
