@@ -102,7 +102,7 @@ export class ServerEndpoint implements Endpoint
     /** Log the client in, using the service's authenticator */
     async authenticateUser(username: string, credentials: Map<string, VarValue>): Promise<void>
     {
-        this.authenticatedUser = await this.context.authenticateUser(username, credentials);
+        this.authenticatedUser = await this.context.authenticateUser(username, credentials, this.connection);
     }
 
     logoutUser(): void
@@ -255,10 +255,10 @@ export class ServerContext
     }
 
     /** Check a client's username and credentials with the service's authenticator */
-    async authenticateUser(username: string, credentials: Map<string, VarValue>): Promise<AuthenticatedUser>
+    async authenticateUser(username: string, credentials: Map<string, VarValue>, connection: ServerTransportConnection | null = null): Promise<AuthenticatedUser>
     {
         if (!this.securityPolicy) throw authenticationError("Authentication not enabled");
-        return await this.securityPolicy.authenticator.authenticateUser(username, credentials, this);
+        return await this.securityPolicy.authenticator.authenticateUser(username, credentials, this, connection);
     }
 
     /** @internal Fail unless the client has logged in, if the service requires it */

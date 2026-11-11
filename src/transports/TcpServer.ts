@@ -17,6 +17,7 @@ import { createServer } from "node:net";
 import type { AddressInfo, Server, Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { RobotRaconteurError } from "robotraconteur";
+import type { NodeID } from "robotraconteur";
 import { MessageErrorType } from "robotraconteur/internal";
 import type { StreamConnection } from "robotraconteur/internal";
 import type { SocketAdapter, SocketEvents, StreamTransportParent } from "robotraconteur/internal";
@@ -85,7 +86,14 @@ export interface TcpServerParent extends StreamTransportParent
     maxConnectionCount: number;
     /** Milliseconds a client has to identify its protocol and create the connection */
     handshakeTimeout: number;
+    /** Close connections that do not start TLS first */
+    requireTls: boolean;
     addServerConnection(c: StreamConnection): void;
+    /**
+     * Switch an accepted socket to TLS with the node certificate. detach stops the plain socket
+     * from delivering data. Throws, before calling detach, if there is no node certificate
+     */
+    startServerTls(socket: Socket, detach: () => void, events: SocketEvents, mutualAuth: boolean, clientNodeID: NodeID, onSecure: (peer: NodeID | null) => void, onFailed: (e: Error) => void): SocketAdapter;
 }
 
 function httpError(socket: Duplex, status: string): void
@@ -204,14 +212,25 @@ export class TcpServer
     {
         const c = new ServerStreamConnection(this.parent);
         c.urlHost = urlHost(socket);
+        c.requireTls = this.parent.requireTls;
         let events: SocketEvents | undefined;
+        let on_data: ((d: Buffer) => void) | undefined;
+        let on_close: (() => void) | undefined;
         const open = async (e: SocketEvents): Promise<SocketAdapter> =>
         {
             events = e;
-            socket.on("data", (d: Buffer) => e.onData(d));
-            socket.on("close", () => e.onClose());
+            on_data = (d: Buffer) => e.onData(d);
+            on_close = () => e.onClose();
+            socket.on("data", on_data);
+            socket.on("close", on_close);
             return new TcpSocketAdapter(socket);
         };
+        const detach = () =>
+        {
+            socket.off("data", on_data!);
+            socket.off("close", on_close!);
+        };
+        c.startTls = (e, mutual, client, on_secure, on_failed) => this.parent.startServerTls(socket, detach, e, mutual, client, on_secure, on_failed);
         try
         {
             await c.accept(open, this.parent.handshakeTimeout);
@@ -273,9 +292,11 @@ export class TcpServer
 
     private async attachWebSocket(ws: WsLike & NodeJS.EventEmitter, host: string): Promise<void>
     {
+        // STARTTLS is not used over WebSockets, which use wss for TLS
         const c = new ServerStreamConnection(this.parent);
         c.urlScheme = "rr+ws";
         c.urlHost = host;
+        c.requireTls = this.parent.requireTls;
         const open = async (e: SocketEvents): Promise<SocketAdapter> =>
         {
             ws.on("message", (data: Buffer, is_binary: boolean) =>

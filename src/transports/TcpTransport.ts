@@ -23,6 +23,7 @@ import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { connect as tlsConnect, TLSSocket } from "node:tls";
 import { parseConnectionUrl, RobotRaconteurError } from "robotraconteur";
+import { NodeID } from "robotraconteur";
 import type { Endpoint, ITransportConnection, RobotRaconteurNode, ServiceStub, Transport } from "robotraconteur";
 import { connectionError, MessageErrorType } from "robotraconteur/internal";
 import type { StreamConnection } from "robotraconteur/internal";
@@ -30,7 +31,8 @@ import { TcpSocketAdapter, WebSocketAdapter, WEBSOCKET_PROTOCOL } from "./Socket
 
 export { WebSocketAdapter };
 import type { SocketAdapter, SocketEvents } from "robotraconteur/internal";
-import { TcpClientConnection } from "./StreamConnections.js";
+import { ServerStreamConnection, TcpClientConnection } from "./StreamConnections.js";
+import { ServerEndpoint } from "../service/ServerContext.js";
 import type { StreamTlsOptions, TlsStarter } from "./StreamConnections.js";
 import { CertificateError, verifyNodeCertificate } from "./NodeCertificate.js";
 import { userConfigDir } from "./NodeDirectories.js";
@@ -117,9 +119,11 @@ export interface TlsClientOptions
      * ROBOTRACONTEUR_SSL_CERT_DIR, are trusted as well.
      */
     useDefaultRoots?: boolean;
+
     /**
-     * A certificate and key for this node as PKCS#12, sent to servers that check clients. It must be
-     * the certificate for the node ID of this node.
+     * The certificate and key of this node as PKCS#12, which must be for the node ID of this node.
+     * Clients send it to services that check clients, and services present it for rrs+tcp.
+     * loadTlsNodeCertificate loads it from where Core keeps it.
      */
     clientCertificate?: { pfx: string | Buffer; passphrase?: string };
 }
@@ -371,8 +375,8 @@ export class TcpTransport implements Transport, TcpServerParent
     /** Options for rrs+tcp connections */
     tlsOptions: TlsClientOptions = {};
     /**
-     * Only connect using rrs+tcp, so that every connection uses TLS and a verified certificate. As
-     * Core does with RequireTls.
+     * Only connect using rrs+tcp, so that every connection uses TLS and a verified certificate,
+     * and close server connections that do not start TLS first. As Core does with RequireTls.
      */
     requireTls = false;
 
@@ -478,34 +482,94 @@ export class TcpTransport implements Transport, TcpServerParent
         return [`rr+tcp://localhost:${port}?nodeid=${id}&service=${service}`];
     }
 
-    private connectionOf(client: ServiceStub): TcpClientConnection
+    private connectionOf(peer: ServiceStub | ServerEndpoint): TcpClientConnection | ServerStreamConnection
     {
-        const c = client.context.transportConnection;
-        if (!(c instanceof TcpClientConnection) || !this.connections.has(c)) throw connectionError("The client is not connected using this transport");
+        const c = peer instanceof ServerEndpoint ? peer.connection : peer.context.transportConnection;
+        if (!(c instanceof TcpClientConnection || c instanceof ServerStreamConnection) || !this.connections.has(c)) throw connectionError("The peer is not connected using this transport");
         return c;
     }
 
-    /** Whether a client's connection uses TLS. Throws if it is not connected using this transport */
-    isTransportConnectionSecure(client: ServiceStub): boolean
+    /**
+     * Whether a connection uses TLS: a client's connection to a service, or, given a
+     * ServerEndpoint such as ServerEndpoint.current, a client's connection to this node's service.
+     * Throws if it is not connected using this transport
+     */
+    isTransportConnectionSecure(peer: ServiceStub | ServerEndpoint): boolean
     {
-        return this.connectionOf(client).secure;
+        return this.connectionOf(peer).secure;
     }
 
     /**
-     * Whether the service's node certificate has been verified. TLS is only used once it has been,
-     * so this is the same as isTransportConnectionSecure.
+     * Whether the other node's certificate has been verified. A service's certificate always is
+     * once TLS is in use. A client's certificate is verified if it asked for mutual authentication.
      */
-    isSecurePeerIdentityVerified(client: ServiceStub): boolean
+    isSecurePeerIdentityVerified(peer: ServiceStub | ServerEndpoint): boolean
     {
-        return this.connectionOf(client).secure;
+        const c = this.connectionOf(peer);
+        return c instanceof ServerStreamConnection ? c.securePeerIdentity !== null : c.secure;
     }
 
-    /** The node ID of the service, verified by its certificate. Throws if it has not been verified */
-    getSecurePeerIdentity(client: ServiceStub): string
+    /** The node ID of the other node, verified by its certificate. Throws if it has not been verified */
+    getSecurePeerIdentity(peer: ServiceStub | ServerEndpoint): string
     {
-        const c = this.connectionOf(client);
+        const c = this.connectionOf(peer);
+        if (c instanceof ServerStreamConnection)
+        {
+            if (!c.securePeerIdentity) throw authenticationError("Peer identity is not verified");
+            return c.securePeerIdentity.toString();
+        }
         if (!c.secure) throw authenticationError("Peer identity is not verified");
         return c.remoteNodeID.toString();
+    }
+
+    /**
+     * Switch an accepted socket to TLS as Core's server does, presenting the node certificate. With
+     * mutual authentication, the client's certificate chain is checked and its node ID reported.
+     * Core clients send STARTTLS before giving their node ID, so the connection compares the two
+     * once the client creates the connection.
+     */
+    startServerTls(socket: Socket, detach: () => void, events: SocketEvents, mutualAuth: boolean, clientNodeID: NodeID, onSecure: (peer: NodeID | null) => void, onFailed: (e: Error) => void): SocketAdapter
+    {
+        const cert = this.tlsOptions.clientCertificate;
+        if (!cert) throw connectionError("Server certificate not loaded");
+        const options = this.tlsOptions;
+        detach();
+        const t = new TLSSocket(socket, { isServer: true, pfx: cert.pfx, passphrase: cert.passphrase, requestCert: mutualAuth, rejectUnauthorized: false, minVersion: "TLSv1.2" });
+        const timer = setTimeout(() => t.destroy(), this.handshakeTimeout);
+        timer.unref();
+        t.once("secure", () =>
+        {
+            clearTimeout(timer);
+            let peer: NodeID | null = null;
+            if (mutualAuth)
+            {
+                try
+                {
+                    const chain = peerChain(t);
+                    const leaf = chain.length > 0 ? new X509Certificate(chain[0]!) : null;
+                    const m = /^CN=Robot Raconteur Node (\{[0-9a-fA-F-]{36}\})$/.exec(leaf?.subject ?? "");
+                    if (!m) throw new CertificateError("The client did not send a node certificate");
+                    peer = new NodeID(m[1]!);
+                    if (!clientNodeID.isAnyNode && !clientNodeID.equals(peer)) throw new CertificateError("The client certificate is not for the client's node");
+                    verifyNodeCertificate(chain, { roots: trustedRoots(options), nodeID: peer });
+                }
+                catch (e)
+                {
+                    t.destroy();
+                    onFailed(e as Error);
+                    return;
+                }
+            }
+            onSecure(peer);
+        });
+        t.on("data", (d: Buffer) => events.onData(d));
+        t.on("error", () => undefined); // Always followed by close
+        t.on("close", () =>
+        {
+            clearTimeout(timer);
+            events.onClose();
+        });
+        return new TcpSocketAdapter(t);
     }
 
     /**
@@ -599,7 +663,8 @@ export class TcpTransport implements Transport, TcpServerParent
         const id = node.nodeID.toString();
         const host = address.includes(":") ? `[${address.replace(/%.*$/, "")}]` : address;
         const header = `Robot Raconteur Node Discovery Packet\n${node.nodeName === "" ? id : `${id},${node.nodeName}`}\n`;
-        return ["rr+tcp"].map((scheme) =>
+        // Core also announces rrs+tcp when the node certificate is loaded
+        return (this.isTlsNodeCertificateLoaded ? ["rr+tcp", "rrs+tcp"] : ["rr+tcp"]).map((scheme) =>
         {
             const packet = `${header}${scheme}://${host}:${server.listenPort}/?nodeid=${nodeIDForUrl(node.nodeID)}&service=RobotRaconteurServiceIndex\n`;
             const with_nonce = `${packet}ServiceStateNonce: ${node.serviceStateNonce}\n`;

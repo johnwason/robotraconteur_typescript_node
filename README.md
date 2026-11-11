@@ -4,7 +4,7 @@
 
 Node.js additions for the [robotraconteur](https://github.com/johnwason/robotraconteur_typescript) TypeScript client: the `rr+tcp` transport, services, and discovery of nodes and services on the network. Browsers cannot use TCP sockets or UDP, so these live in a separate package and the browser library stays small.
 
-**Status:** early development. The client side of TCP, TLS (`rrs+tcp`), WebSockets, discovery, and subscriptions by service type are implemented. Services support properties, functions, generators, objrefs, events, callbacks, wires, pipes, authentication, and object and monitor locks, served over `rr+tcp` and `rr+ws`. Services can be announced for discovery. Memories, TLS for services, and the Local transport are not implemented yet.
+**Status:** early development. The client side of TCP, TLS (`rrs+tcp`), WebSockets, discovery, and subscriptions by service type are implemented. Services support properties, functions, generators, objrefs, events, callbacks, wires, pipes, authentication, and object and monitor locks, served over `rr+tcp` and `rr+ws`. Services can use TLS (`rrs+tcp`) and can be announced for discovery. Memories and the Local transport are not implemented yet.
 
 Requires Node.js 22 or newer.
 
@@ -78,6 +78,8 @@ To load this node's certificate from where Core keeps it, `certificates/{nodeid}
 Discovery looks for both `rr+tcp` and `rrs+tcp` URLs. When a node offers both, `rrs+tcp` is tried first and `rr+tcp` shortly after, as in Core, and whichever connects first is used. To use only TLS, set `transportSchemes: ["rrs+tcp"]` in a subscription filter, or `requireTls` on the transport.
 
 Set `tcp.requireTls = true` to refuse any URL other than `rrs+tcp`. For a connected client, `tcp.isTransportConnectionSecure(client)` and `tcp.isSecurePeerIdentityVerified(client)` report whether it uses TLS with a verified certificate, and `tcp.getSecurePeerIdentity(client)` returns the verified node ID.
+
+Services accept `rrs+tcp` too, once the node has its certificate in `tlsOptions.clientCertificate` or from `loadTlsNodeCertificate()`. The service presents the certificate after the client's STARTTLS, as Core's does, and checks the client's certificate if the client asks for mutual authentication. Inside a request, `tcp.isTransportConnectionSecure(ServerEndpoint.current)`, `tcp.isSecurePeerIdentityVerified(ServerEndpoint.current)`, and `tcp.getSecurePeerIdentity(ServerEndpoint.current)` report the client's connection and verified node ID. With `requireTls`, the server closes connections that do not start TLS. `new PasswordFileUserAuthenticator(text, true)` lets users log in only from verified clients, and from the node IDs in a fourth column of the password file if a user has them, as in Core. STARTTLS is not offered over WebSockets.
 
 Node certificates mark each level of their chain with a critical extension that OpenSSL does not recognize, so the TLS module of Node.js rejects all of them. The package turns its check off and checks the chain itself before anything else is sent: signatures, dates, certificate authority flags and path lengths, the Robot Raconteur extension for each level, and the node named in the certificate. `verifyNodeCertificate` performs the same check on its own.
 
