@@ -74,7 +74,7 @@ Inside a request, `ServerEndpoint.currentAuthenticatedUser` is the user of the r
 
 A client with the `objectlock` privilege can lock an object, and the objects under it, for its user or for its own session, as in Core. Other clients receive `RobotRaconteur.ObjectLockedError` until it is released. A user with `objectlockoverride` can release other users' locks. Members marked `nolock` in the service definition stay usable while the object is locked, and properties marked `nolockread` can still be read.
 
-The `robotraconteur` client package cannot request locks yet, but Core's and Python's clients can.
+Clients lock objects with `node.requestObjectLock(obj)` and `node.releaseObjectLock(obj)`, as Core's clients do with `RequestObjectLock` and `ReleaseObjectLock`.
 
 The service can lock an object itself, with a username that no client logs in as:
 
@@ -84,4 +84,4 @@ await context.requestObjectLock("robot.tool", "server");
 
 ## Monitor locks
 
-Monitor locks give one client at a time an object, for a sequence of requests. They need no privilege or security policy. An object's `RobotRaconteurMonitorEnter(timeout)` and `RobotRaconteurMonitorExit()` methods are called if it has them, as in Python. A client's monitor lock is released when it disconnects.
+Monitor locks give one client at a time an object, for a sequence of requests. Clients use `node.monitorEnter(obj, timeout)` and `node.monitorExit(obj)`. They need no privilege or security policy. An object's `RobotRaconteurMonitorEnter(timeout)` and `RobotRaconteurMonitorExit()` methods are called if it has them, as in Python. A client's monitor lock is released when it disconnects.
