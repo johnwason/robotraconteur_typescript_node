@@ -9,7 +9,9 @@
         "url": "https://github.com/johnwason/robotraconteur_typescript_node.git"
     },
     "type": "module",
-    "sideEffects": false,
+    "sideEffects": [
+        "**/service/ServiceHost.*"
+    ],
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "exports": {
