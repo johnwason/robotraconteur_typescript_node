@@ -6,8 +6,19 @@
     "author": "Wason Technology, LLC",
     "repository": {
         "type": "git",
-        "url": "https://github.com/johnwason/robotraconteur_typescript_node.git"
+        "url": "https://github.com/robotraconteur/robotraconteur_typescript_node.git"
     },
+    "homepage": "https://robotraconteur.github.io/robotraconteur_typescript_node/",
+    "bugs": "https://github.com/robotraconteur/robotraconteur_typescript_node/issues",
+    "keywords": [
+        "robotraconteur",
+        "robot raconteur",
+        "robotics",
+        "automation",
+        "tcp",
+        "tls",
+        "discovery"
+    ],
     "type": "module",
     "sideEffects": [
         "**/service/ServiceHost.*"
@@ -23,7 +34,8 @@
     "files": [
         "dist",
         "LICENSE",
-        "README.md"
+        "README.md",
+        "CHANGELOG.md"
     ],
     "engines": {
         "node": ">=22"
@@ -31,6 +43,7 @@
     "scripts": {
         "link-shared": "node scripts/link-shared.mjs",
         "build": "npm run link-shared && tsc -p tsconfig.json",
+        "prepack": "npm run build",
         "build:test": "npm run build && tsc -p tsconfig.test.json && node scripts/bundle-tests.mjs",
         "test:unit": "npm run build:test && node --test \"dist-test/unit/*.test.mjs\"",
         "test:integration": "npm run build:test && node --test --test-concurrency=1 \"dist-test/integration/*.test.mjs\"",
@@ -42,12 +55,7 @@
         "ws": "8.22.2"
     },
     "peerDependencies": {
-        "robotraconteur": "0.1.0"
-    },
-    "peerDependenciesMeta": {
-        "robotraconteur": {
-            "optional": true
-        }
+        "robotraconteur": "^0.1.0"
     },
     "devDependencies": {
         "@types/node": "22.10.2",

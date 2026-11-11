@@ -4,6 +4,7 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -13,7 +14,7 @@ env:
   PYTHON_VERSION: "3.12"
   RR_CORE_VERSION: v1.2.9
   # The branch of the shared package to build and test against
-  RR_SHARED_REF: dev
+  RR_SHARED_REF: main
   # Core's Python test clients, which run against the TypeScript test services, at the Core commit
   # that the shared package's test vector blob comes from. Keep in step with the shared package's
   # RR_CORE_TEST_VECTORS_REF and with the Dockerfile
@@ -44,7 +45,7 @@ jobs:
     - name: Checkout the shared package
       uses: actions/checkout@v4
       with:
-        repository: johnwason/robotraconteur_typescript
+        repository: robotraconteur/robotraconteur_typescript
         ref: ${{ env.RR_SHARED_REF }}
         path: robotraconteur_typescript
     - name: Checkout Robot Raconteur Core test services

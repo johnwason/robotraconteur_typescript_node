@@ -4,33 +4,26 @@ title: Getting started
 
 # Getting started
 
-`robotraconteur-node` adds what Node.js programs need to the [robotraconteur](https://johnwason.github.io/robotraconteur_typescript/) TypeScript client:
+`robotraconteur-node` adds what Node.js programs need to the [robotraconteur](https://robotraconteur.github.io/robotraconteur_typescript/) TypeScript client:
 
 - the `rr+tcp` transport, and `rr+ws` and `rr+wss` from Node.js
 - TLS with Robot Raconteur node certificates (`rrs+tcp`)
 - discovery of nodes and services on the network, and subscriptions by service type
 - services: serving JavaScript objects to any Robot Raconteur client
 
-Browsers cannot use TCP sockets or UDP, so these are a separate package and the browser library stays small. Using a service, wires, pipes, subscriptions by URL, and value types are the same as in the browser, and are described in the [robotraconteur guide](https://johnwason.github.io/robotraconteur_typescript/documents/Using_a_service.html).
+Browsers cannot use TCP sockets or UDP, so these are a separate package and the browser library stays small. Using a service, wires, pipes, subscriptions by URL, and value types are the same as in the browser, and are described in the [robotraconteur guide](https://robotraconteur.github.io/robotraconteur_typescript/documents/Using_a_service.html).
 
 Node.js 22 or newer is required.
 
 ## Installing
 
-Neither package is on npm yet. This package needs the shared package in a folder next to this one:
-
 ```sh
-git clone https://github.com/johnwason/robotraconteur_typescript.git
-git clone https://github.com/johnwason/robotraconteur_typescript_node.git
-
-cd robotraconteur_typescript
-npm install
-npm run build
-
-cd ../robotraconteur_typescript_node
-npm install
-npm run build
+npm install robotraconteur robotraconteur-node
 ```
+
+`robotraconteur` is a peer dependency, so that both packages use one copy of it. The API may change in any release before 1.0, so pin the versions and read the changelogs before upgrading.
+
+To run the examples, clone both repositories into one folder, and build `robotraconteur_typescript` and then `robotraconteur_typescript_node` with `npm install` and `npm run build`.
 
 ## Connecting over TCP
 

@@ -44,7 +44,7 @@ Discovery listens on UDP port 48653, and the firewall must allow it. Information
 
 ## Subscriptions by type
 
-A subscription finds services and keeps them connected. Subscriptions to a known URL are in the `robotraconteur` package and are described in its [Staying connected](https://johnwason.github.io/robotraconteur_typescript/documents/Staying_connected.html) page. Subscriptions by type are here:
+A subscription finds services and keeps them connected. Subscriptions to a known URL are in the `robotraconteur` package and are described in its [Staying connected](https://robotraconteur.github.io/robotraconteur_typescript/documents/Staying_connected.html) page. Subscriptions by type are here:
 
 ```js
 const subscription = discovery.subscribeServiceByType("experimental.reynard_the_robot.Reynard", {
@@ -63,7 +63,7 @@ subscription.close();
 
 A subscription keeps the program running until it is closed or `node.shutdown()` is called. Without a filter, it tries every service of the type, including any that need a password. A service that fails to connect 25 times in a row is dropped until it is announced again.
 
-A third argument sets the subscription's options, such as `connectRetryDelay` and `decodeOptions`. Decode options can receive large arrays of named arrays, such as point clouds, as typed array views, as described in the shared package's [Value types](https://johnwason.github.io/robotraconteur_typescript/documents/Value_types.html#large-arrays) page:
+A third argument sets the subscription's options, such as `connectRetryDelay` and `decodeOptions`. Decode options can receive large arrays of named arrays, such as point clouds, as typed array views, as described in the shared package's [Value types](https://robotraconteur.github.io/robotraconteur_typescript/documents/Value_types.html#large-arrays) page:
 
 ```js
 const subscription = discovery.subscribeServiceByType("com.robotraconteur.pointcloud.sensor.PointCloudSensor", undefined, {

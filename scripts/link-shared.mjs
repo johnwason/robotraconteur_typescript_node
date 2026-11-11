@@ -1,4 +1,6 @@
-// Link the sibling robotraconteur_typescript checkout, until the shared package is on npm.
+// Link the sibling robotraconteur_typescript checkout, so that this package is developed and tested
+// against its source. Users get the package from npm, as a peer dependency. .npmrc keeps npm from
+// installing it.
 import { existsSync, lstatSync, mkdirSync, symlinkSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

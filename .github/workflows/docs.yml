@@ -1,8 +1,8 @@
 name: Docs
 
 # Builds the documentation site on every push and pull request, failing on any TypeDoc warning, such
-# as an undocumented export or a broken link. Pushes to dev publish it with GitHub Pages, which must
-# be set to deploy from GitHub Actions in the repository settings.
+# as an undocumented export or a broken link. Pushes to main publish it with GitHub Pages, which must
+# be set to deploy from GitHub Actions in the repository settings. Forks only build it.
 
 on:
   push:
@@ -15,7 +15,7 @@ permissions:
 env:
   NODE_VERSION: 22.12.0
   # The branch of the shared package to build against
-  RR_SHARED_REF: dev
+  RR_SHARED_REF: main
 
 jobs:
   build:
@@ -30,7 +30,7 @@ jobs:
     - name: Checkout the shared package
       uses: actions/checkout@v4
       with:
-        repository: johnwason/robotraconteur_typescript
+        repository: robotraconteur/robotraconteur_typescript
         ref: ${{ env.RR_SHARED_REF }}
         path: robotraconteur_typescript
     - name: Setup Node.js
@@ -45,13 +45,13 @@ jobs:
     - name: Build the documentation
       run: npm run docs
     - name: Upload the site
-      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dev'
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.repository_owner == 'robotraconteur'
       uses: actions/upload-pages-artifact@v3
       with:
         path: robotraconteur_typescript_node/docs-site
 
   deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dev'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.repository_owner == 'robotraconteur'
     needs: build
     runs-on: ubuntu-24.04
     permissions:

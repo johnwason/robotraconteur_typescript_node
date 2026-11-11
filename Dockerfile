@@ -17,5 +17,5 @@ RUN git init -q /opt/rr-core-tests \
 ENV RR_CORE_PYTHON_TESTS=/opt/rr-core-tests/test/python
 
 WORKDIR /work/robotraconteur_typescript_node
-COPY package.json package-lock.json* ./
+COPY package.json package-lock.json* .npmrc ./
 RUN npm install --no-audit --no-fund

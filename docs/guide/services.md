@@ -61,7 +61,7 @@ Register service definitions from their text, which is what clients receive, inc
 | `callback` | A {@link Callback} that the node puts on the object |
 | `wire`, `pipe` | A {@link WireServer} or {@link PipeServer} that the node puts on the object, described below |
 
-Values use the same types as clients receive. See the shared package's [Value types](https://johnwason.github.io/robotraconteur_typescript/documents/Value_types.html) page. A method named `RRServiceObjectInit(context, servicePath)` is called when the object is first served, with its {@link ServerContext}.
+Values use the same types as clients receive. See the shared package's [Value types](https://robotraconteur.github.io/robotraconteur_typescript/documents/Value_types.html) page. A method named `RRServiceObjectInit(context, servicePath)` is called when the object is first served, with its {@link ServerContext}.
 
 ## Objrefs
 
@@ -185,7 +185,7 @@ const points = context.newNamedArrayView("com.robotraconteur.geometry.Vector3", 
 points.array[0] = 1.5; // x of point 0
 ```
 
-See the shared package's [Value types](https://johnwason.github.io/robotraconteur_typescript/documents/Value_types.html#large-arrays) page for the layout of a view.
+See the shared package's [Value types](https://robotraconteur.github.io/robotraconteur_typescript/documents/Value_types.html#large-arrays) page for the layout of a view.
 
 ## Not supported yet
 
