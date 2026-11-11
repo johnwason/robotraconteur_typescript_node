@@ -21,6 +21,8 @@ import { connect, isIP, isIPv6, Socket } from "node:net";
 import type { LookupFunction } from "node:net";
 import { networkInterfaces } from "node:os";
 import { join } from "node:path";
+import type { IncomingMessage } from "node:http";
+import type { Duplex } from "node:stream";
 import { connect as tlsConnect, TLSSocket } from "node:tls";
 import { parseConnectionUrl, RobotRaconteurError } from "robotraconteur";
 import { NodeID } from "robotraconteur";
@@ -43,7 +45,8 @@ import { addServicesChangedListener, removeServicesChangedListener } from "../se
 import { nodeIDForUrl } from "../service/ServiceIndex.js";
 import { isLoopback } from "./NetworkUtil.js";
 import type { NodeAnnouncement } from "./IPNodeDiscovery.js";
-import { DEFAULT_WEBSOCKET_ALLOWED_ORIGINS, TcpServer } from "./TcpServer.js";
+import { DEFAULT_WEBSOCKET_ALLOWED_ORIGINS, httpError, isWebSocketOriginAllowed, TcpServer, urlHost } from "./TcpServer.js";
+import type { WsLike } from "./SocketAdapters.js";
 import type { TcpServerParent } from "./TcpServer.js";
 
 
@@ -392,6 +395,7 @@ export class TcpTransport implements Transport, TcpServerParent
     private connections = new Set<StreamConnection>();
     private discovery: IPNodeDiscovery | null = null;
     private announcer: NodeAnnouncer | null = null;
+    private wss: { handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, cb: (ws: WsLike & NodeJS.EventEmitter) => void): void } | null = null;
     private announce_now = () => this.announcer?.announceNow();
     private announce_period = 55000;
     private server: TcpServer | null = null;
@@ -458,6 +462,114 @@ export class TcpTransport implements Transport, TcpServerParent
         const server = new TcpServer(this);
         await server.start(port, options.localhostOnly ?? false);
         this.server = server;
+    }
+
+    /**
+     * Accept a Robot Raconteur WebSocket from a web server's upgrade event, such as on a Node.js
+     * http or https server, an Express app's server, or a Next.js custom server. The request must
+     * ask for the Robot Raconteur subprotocol if it asks for any, and come from an origin in
+     * webSocketAllowedOrigins if it has one, as Core checks. The request is refused with an HTTP
+     * error otherwise. startServer is not needed. Clients connect with the URL of the request,
+     * such as rr+ws://example.com/robotraconteur, or rr+wss for an https server.
+     */
+    handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void>
+    {
+        return this.serveUpgrade(req, socket, head, true);
+    }
+
+    /** @internal */
+    async serveUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, hostHeader: boolean): Promise<void>
+    {
+        if (!this.acceptWebSockets)
+        {
+            httpError(socket, "404 Not Found");
+            return;
+        }
+        const protocols = req.headers["sec-websocket-protocol"];
+        if (protocols !== undefined && !protocols.split(",").some((p) => p.trim().toLowerCase() === WEBSOCKET_PROTOCOL))
+        {
+            httpError(socket, "426 Upgrade Required");
+            return;
+        }
+        const origin = req.headers.origin;
+        if (origin !== undefined && !isWebSocketOriginAllowed(origin, this.webSocketAllowedOrigins))
+        {
+            httpError(socket, "403 Forbidden Origin");
+            return;
+        }
+        if (!this.wss)
+        {
+            const { WebSocketServer } = await import("ws");
+            this.wss = new WebSocketServer({
+                noServer: true,
+                perMessageDeflate: false,
+                maxPayload: this.maxMessageSize,
+                handleProtocols: (p: Set<string>) => (p.has(WEBSOCKET_PROTOCOL) ? WEBSOCKET_PROTOCOL : false)
+            }) as unknown as typeof this.wss;
+        }
+        const tls = (req.socket as Partial<TLSSocket>).encrypted === true;
+        const host = hostHeader ? (req.headers.host ?? urlHost(req.socket)) : urlHost(req.socket);
+        const path = hostHeader ? (req.url ?? "/").split("?")[0]! : "/";
+        this.wss!.handleUpgrade(req, socket, head, (ws) => void this.attachWebSocket(ws, tls ? "rr+wss" : "rr+ws", host, path, tls).catch(() => undefined));
+    }
+
+    /**
+     * Serve a WebSocket that a web server has already accepted, from the ws library, as
+     * RobotRaconteurWeb's AcceptAndProcessServerWebSocket. The web server is responsible for the
+     * checks handleUpgrade makes, and should confirm the robotraconteur.robotraconteur.com
+     * subprotocol when the client asks for it, as browsers require. url is the URL the client used,
+     * such as wss://example.com/robotraconteur, which the service index reports to clients. A wss
+     * or https URL marks the connection as secure.
+     */
+    async acceptWebSocket(ws: WsLike & NodeJS.EventEmitter, url = ""): Promise<void>
+    {
+        if (!this.acceptWebSockets)
+        {
+            ws.terminate();
+            throw new RobotRaconteurError(MessageErrorType.InvalidOperation, "RobotRaconteur.InvalidOperation", "Transport not accepting websockets");
+        }
+        let scheme = "rr+ws";
+        let host = "";
+        let path = "/";
+        if (url !== "")
+        {
+            const u = new URL(url);
+            scheme = /^(wss|https|rr\+wss):$/.test(u.protocol) ? "rr+wss" : "rr+ws";
+            host = u.host;
+            path = u.pathname;
+        }
+        await this.attachWebSocket(ws, scheme, host, path, scheme === "rr+wss");
+    }
+
+    private async attachWebSocket(ws: WsLike & NodeJS.EventEmitter, scheme: string, host: string, path: string, secure: boolean): Promise<void>
+    {
+        // STARTTLS is not used over WebSockets, which use wss for TLS
+        const c = new ServerStreamConnection(this);
+        c.urlScheme = scheme;
+        c.urlHost = host;
+        c.urlPath = path;
+        c.secure = secure;
+        c.requireTls = this.requireTls;
+        const open = async (e: SocketEvents): Promise<SocketAdapter> =>
+        {
+            ws.on("message", (data: Buffer, is_binary: boolean) =>
+            {
+                if (is_binary) e.onData(data);
+            });
+            ws.on("error", () => undefined); // Always followed by close
+            ws.on("close", () => e.onClose());
+            return new WebSocketAdapter(ws);
+        };
+        try
+        {
+            await c.accept(open, this.handshakeTimeout);
+            this.addServerConnection(c);
+        }
+        catch (e)
+        {
+            ws.terminate();
+            throw e;
+        }
     }
 
     /** Stop listening. Connected clients are not affected */

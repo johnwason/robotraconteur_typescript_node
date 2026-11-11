@@ -239,6 +239,16 @@ Some details follow Core and Python:
 - To require clients to log in, pass a `ServiceSecurityPolicy` to `registerService`: `new ServiceSecurityPolicy(new PasswordFileUserAuthenticator(text), { requirevaliduser: "true", allowobjectlock: "true" })`. The text is Core's password file format, one `username md5-of-password privileges` line per user. Any object with `authenticateUser(username, credentials, context)` can be the authenticator. `ServerEndpoint.currentAuthenticatedUser` is the user of the request being served.
 - Clients with the `objectlock` privilege can lock objects for their user or their session, and `objectlockoverride` can release other users' locks. Members marked `nolock` or `nolockread` stay usable. The service can lock an object itself with `context.requestObjectLock(path, "server")`. Monitor locks give one client at a time an object. They need no privilege, and an object's `RobotRaconteurMonitorEnter(timeout)` and `RobotRaconteurMonitorExit()` methods are called if it has them, as in Python.
 - `await tcp.enableNodeAnnounce()` announces the node so that clients can discover its services by type, as Core's `EnableNodeAnnounce`. It uses Core's IPv6 node-local, link-local, and site-local multicast by default. Pass `IPNodeDiscoveryFlags` for IPv4 broadcast. The node serves Core's `RobotRaconteurServiceIndex` service once it has a service, and `node.serviceStateNonce` changes whenever services are registered or closed, so that clients know to list them again. Only string and numeric array attributes are reported to discovery, as in Core.
+- Services can also take WebSockets from the application's own web server, as RobotRaconteurWeb does from ASP.NET. Call `tcp.handleUpgrade(req, socket, head)` from a Node.js `http` or `https` server's `upgrade` event, such as the server of an Express app or a Next.js custom server. It makes Core's subprotocol and origin checks, and `startServer` is not needed. Clients connect with the URL of the request, such as `rr+ws://example.com/robotraconteur`, or `rr+wss` from an `https` server. A server that accepts WebSockets itself with the `ws` library can pass each one to `tcp.acceptWebSocket(ws, url)`. [examples/wstest_server.mjs](examples/wstest_server.mjs) is a complete web server.
+
+```js
+const server = http.createServer(app);
+server.on("upgrade", (req, socket, head) => {
+    if (req.url.startsWith("/robotraconteur")) tcp.handleUpgrade(req, socket, head);
+    else socket.destroy();
+});
+```
+
 - `ServerEndpoint.current` is the client whose request is being served, including after `await` in the same request.
 - `registerService` returns the `ServerContext`, which holds the service `attributes` sent to clients, `addExtraImport`, `releaseServicePath`, and `close()`.
 
