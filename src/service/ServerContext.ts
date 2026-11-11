@@ -16,7 +16,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { RobotRaconteurError } from "robotraconteur";
 import type { Endpoint, NodeID, VarValue, RobotRaconteurNode, ServiceDefinition, TypeDefinition } from "robotraconteur";
 import type { ServerTransportConnection } from "../transports/StreamConnections.js";
-import { DataTypes, errorToEntry, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, packElement, TypeContext } from "robotraconteur/internal";
+import { DataTypes, errorToEntry, getElement, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, packElement, TypeContext, unpackElement } from "robotraconteur/internal";
+import { authenticationError, PERMISSION_DENIED } from "./Security.js";
+import type { AuthenticatedUser, ServiceSecurityPolicy } from "./Security.js";
 import { serviceError, ServiceSkel } from "./ServiceSkel.js";
 import type { ServiceObject } from "./ServiceSkel.js";
 
@@ -60,8 +62,16 @@ export class ServerEndpoint implements Endpoint
         return ServerEndpoint.current_storage.getStore();
     }
 
+    /** The client whose request is being served is logged in as this user, if any */
+    static get currentAuthenticatedUser(): AuthenticatedUser | null
+    {
+        return ServerEndpoint.current?.authenticatedUser ?? null;
+    }
+
     localEndpoint = 0;
     lastMessageReceived = Date.now();
+    /** The user the client has logged in as */
+    authenticatedUser: AuthenticatedUser | null = null;
     private message_number = 0;
     private request_number = 0;
     private pending = new Map<number, { resolve: (e: MessageEntry) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -86,6 +96,17 @@ export class ServerEndpoint implements Endpoint
     transportConnectionClosed(): void
     {
         this.context.removeClient(this);
+    }
+
+    /** Log the client in, using the service's authenticator */
+    async authenticateUser(username: string, credentials: Map<string, VarValue>): Promise<void>
+    {
+        this.authenticatedUser = await this.context.authenticateUser(username, credentials);
+    }
+
+    logoutUser(): void
+    {
+        this.authenticatedUser = null;
     }
 
     /** Send entries to the client. Fails if the connection has closed */
@@ -203,7 +224,7 @@ export class ServerContext
     private cleanup_timer: ReturnType<typeof setInterval>;
     private closed = false;
 
-    constructor(readonly node: RobotRaconteurNode, readonly serviceName: string, readonly rootObjectType: string, root: ServiceObject, private on_close: () => void)
+    constructor(readonly node: RobotRaconteurNode, readonly serviceName: string, readonly rootObjectType: string, root: ServiceObject, private on_close: () => void, readonly securityPolicy: ServiceSecurityPolicy | null = null)
     {
         this.types = new TypeContext(node.serviceTypes);
         const skel = new ServiceSkel(this, serviceName, root, rootObjectType);
@@ -211,6 +232,38 @@ export class ServerContext
         skel.init();
         this.cleanup_timer = setInterval(() => this.periodicCleanup(), 5000);
         this.cleanup_timer.unref();
+    }
+
+    private policy(name: string): boolean
+    {
+        return this.securityPolicy?.policies[name]?.toLowerCase() === "true";
+    }
+
+    /** Clients must log in before using the service, as the "requirevaliduser" policy sets */
+    get requireValidUser(): boolean
+    {
+        return this.policy("requirevaliduser");
+    }
+
+    /** Users with the objectlock privilege may lock objects, as the "allowobjectlock" policy sets */
+    get allowObjectLock(): boolean
+    {
+        return this.policy("allowobjectlock");
+    }
+
+    /** Check a client's username and credentials with the service's authenticator */
+    async authenticateUser(username: string, credentials: Map<string, VarValue>): Promise<AuthenticatedUser>
+    {
+        if (!this.securityPolicy) throw authenticationError("Authentication not enabled");
+        return await this.securityPolicy.authenticator.authenticateUser(username, credentials, this);
+    }
+
+    /** @internal Fail unless the client has logged in, if the service requires it */
+    checkAuthenticated(ep: ServerEndpoint): void
+    {
+        if (!this.requireValidUser) return;
+        if (!ep.authenticatedUser) throw serviceError(PERMISSION_DENIED, "PermissionDenied", "User must authenticate before accessing this service");
+        ep.authenticatedUser.updateLastAccess();
     }
 
     /** The service definition of the root object */
@@ -399,7 +452,12 @@ export class ServerContext
                 return r;
             }
         case MessageEntryType.ClientSessionOpReq:
-            return this.clientSessionOp(m);
+            return this.clientSessionOp(m, ep);
+        }
+
+        this.checkAuthenticated(ep);
+        switch (m.entryType)
+        {
         case MessageEntryType.ObjectTypeName:
             {
                 const r = new MessageEntry(MessageEntryType.ObjectTypeNameRet, m.memberName);
@@ -434,16 +492,40 @@ export class ServerContext
         }
     }
 
-    private clientSessionOp(m: MessageEntry): MessageEntry
+    private async clientSessionOp(m: MessageEntry, ep: ServerEndpoint): Promise<MessageEntry>
     {
+        if (!this.securityPolicy && !m.memberName.startsWith("Monitor"))
+        {
+            throw serviceError(MessageErrorType.InvalidOperation, "InvalidOperation", "User authentication not activated for this service");
+        }
+        const ok = () =>
+        {
+            const r = new MessageEntry(MessageEntryType.ClientSessionOpRet, m.memberName);
+            r.addElement(MessageElement.string("return", "OK"));
+            return r;
+        };
         switch (m.memberName)
         {
         case "AuthenticateUser":
-            throw serviceError(MessageErrorType.AuthenticationError, "AuthenticationError", "Authentication not enabled for service");
+            {
+                const username = getElement(m.elements, "username").castString();
+                const credentials = unpackElement(getElement(m.elements, "credentials"), VARVALUE_MAP, NO_SCOPE, this.types) as Map<string, VarValue>;
+                await ep.authenticateUser(username, credentials);
+                return ok();
+            }
         case "LogoutUser":
-            throw serviceError(MessageErrorType.InvalidOperation, "InvalidOperation", "User is not authenticated");
-        default:
+            ep.logoutUser();
+            return ok();
+        case "RequestObjectLock":
+        case "ReleaseObjectLock":
+        case "RequestClientObjectLock":
+        case "ReleaseClientObjectLock":
+        case "MonitorEnter":
+        case "MonitorContinueEnter":
+        case "MonitorExit":
             throw serviceError(MessageErrorType.NotImplementedError, "NotImplementedError", `${m.memberName} is not yet supported by robotraconteur-node services`);
+        default:
+            throw serviceError(MessageErrorType.ProtocolError, "ProtocolError", "Invalid ClientSessionOp command");
         }
     }
 

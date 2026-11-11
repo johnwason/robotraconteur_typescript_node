@@ -15,14 +15,11 @@
 // Serves the ports of Core's test services the same way as Core's test server,
 // test/python/RobotRaconteurTest/service_test_util.py, so that Core's test clients and the
 // ported TypeScript test clients can be run against a robotraconteur-node service.
-//
-// RobotRaconteurTestService_auth is not served, because services do not support authentication
-// yet.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { RobotRaconteurNode, VarValue } from "robotraconteur";
-import { TcpTransport } from "../../src/index.js";
+import { PasswordFileUserAuthenticator, ServiceSecurityPolicy, TcpTransport } from "../../src/index.js";
 import { shared } from "../integration/TestServer.js";
 import { testroot_impl } from "./ServiceTest.js";
 import { testroot3_impl } from "./ServiceTest2.js";
@@ -53,6 +50,11 @@ export async function startTestServiceNode(): Promise<TestServiceNode>
     const c = node.registerService("RobotRaconteurTestService", "com.robotraconteur.testing.TestService1.testroot", new testroot_impl());
     c.attributes.set("test", new VarValue("This is a test attribute", "string"));
     c.attributes.set("test2", new VarValue(Int32Array.of(42), "int32"));
+
+    // The same users as Core's test server. The passwords are testpass1, testpass2, and superpass1
+    const authdata = "testuser1 0b91dec4fe98266a03b136b59219d0d6 objectlock\ntestuser2 841c4221c2e7e0cefbc0392a35222512 objectlock\ntestsuperuser 503ed776c50169f681ad7bbc14198b68 objectlock,objectlockoverride";
+    const policy = new ServiceSecurityPolicy(new PasswordFileUserAuthenticator(authdata), { requirevaliduser: "true", allowobjectlock: "true" });
+    node.registerService("RobotRaconteurTestService_auth", "com.robotraconteur.testing.TestService1.testroot", new testroot_impl(), policy);
 
     node.registerService("RobotRaconteurTestService2", "com.robotraconteur.testing.TestService3.testroot3", new testroot3_impl());
     node.registerService("RobotRaconteurTestService3", "com.robotraconteur.testing.TestService5.asynctestroot", new asynctestroot_impl());

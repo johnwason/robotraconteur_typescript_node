@@ -45,13 +45,8 @@ const MASKED: Record<string, { pytest: string[]; client: string[] }> = {
         client: []
     },
     locks: {
-        pytest: ["test_object_lock", "test_monitor_lock", "test_nolock"],
+        pytest: ["test_object_lock", "test_monitor_lock", "test_nolock", "test_async"],
         client: ["ServiceTestClient2 TestNoLock"]
-    },
-    // RobotRaconteurTestService_auth, which test_async also uses, is not served yet
-    authentication: {
-        pytest: ["test_authentication", "test_async"],
-        client: ["authentication"]
     }
 };
 
