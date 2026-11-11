@@ -91,6 +91,17 @@ export class ServerEndpoint implements Endpoint
     /** Send entries to the client. Fails if the connection has closed */
     send(entries: MessageEntry[]): void
     {
+        this.connection.sendMessage(this.message(entries));
+    }
+
+    /** Send entries, resolving once they have been handed to the network */
+    sendWait(entries: MessageEntry[]): Promise<void>
+    {
+        return this.connection.sendMessageWait(this.message(entries));
+    }
+
+    private message(entries: MessageEntry[]): Message
+    {
         const m = new Message();
         m.entries = entries;
         const h = m.header;
@@ -105,7 +116,7 @@ export class ServerEndpoint implements Endpoint
         h.receiverEndpoint = this.remoteEndpoint;
         h.messageID = this.message_number;
         this.message_number = (this.message_number + 1) & 0xffff;
-        this.connection.sendMessage(m);
+        return m;
     }
 
     /**
@@ -346,6 +357,12 @@ export class ServerContext
 
     private async processMessageEntry(m: MessageEntry, ep: ServerEndpoint): Promise<MessageEntry | null>
     {
+        // Acknowledgements of pipe packets the service sent
+        if (m.entryType === MessageEntryType.PipePacketRet)
+        {
+            this.skels.get(m.servicePath)?.pipeAckReceived(m, ep);
+            return null;
+        }
         // Responses to requests the service sent, such as callbacks
         if (m.entryType % 2 === 0)
         {
@@ -402,12 +419,15 @@ export class ServerContext
         case MessageEntryType.WirePeekInValueReq:
         case MessageEntryType.WirePeekOutValueReq:
         case MessageEntryType.WirePokeOutValueReq:
-            throw serviceError(MessageErrorType.NotImplementedError, "NotImplementedError", "Wires are not yet supported by robotraconteur-node services");
+            return (await this.getObjectSkel(m.servicePath)).wireCommand(m, ep);
+        case MessageEntryType.WirePacket:
+            this.skels.get(m.servicePath)?.wirePacketReceived(m, ep);
+            return null;
         case MessageEntryType.PipeConnectReq:
         case MessageEntryType.PipeDisconnectReq:
-            throw serviceError(MessageErrorType.NotImplementedError, "NotImplementedError", "Pipes are not yet supported by robotraconteur-node services");
+            return (await this.getObjectSkel(m.servicePath)).pipeCommand(m, ep);
         case MessageEntryType.PipePacket:
-        case MessageEntryType.WirePacket:
+            this.skels.get(m.servicePath)?.pipePacketReceived(m, ep);
             return null;
         default:
             throw serviceError(MessageErrorType.ProtocolError, "ProtocolError", "Unknown transaction type");
@@ -439,6 +459,7 @@ export class ServerContext
     {
         if (!this.clients.delete(ep.localEndpoint)) return;
         ep.failPendingRequests();
+        for (const s of this.skels.values()) s.clientDisconnected(ep.localEndpoint);
         ep.connection.detachEndpoint(ep);
         this.node.deleteEndpoint(ep);
         this.notify("ClientDisconnected", ep.localEndpoint);

@@ -18,26 +18,30 @@
  */
 export class EventHook<T extends unknown[] = any[]>
 {
-    private handlers = new Set<(...args: T) => void>();
+    private handlers = new Set<(...args: T) => unknown>();
 
-    addHandler(handler: (...args: T) => void): void
+    addHandler(handler: (...args: T) => unknown): void
     {
         this.handlers.add(handler);
     }
 
-    removeHandler(handler: (...args: T) => void): void
+    removeHandler(handler: (...args: T) => unknown): void
     {
         this.handlers.delete(handler);
     }
 
-    /** Call every handler. An error in one handler does not stop the others */
+    /**
+     * Call every handler. An error in one handler, or a promise it returns that rejects, is
+     * reported and does not stop the others
+     */
     fire(...args: T): void
     {
         for (const h of [...this.handlers])
         {
             try
             {
-                h(...args);
+                const r = h(...args) as { catch?: (f: (e: unknown) => void) => void } | undefined;
+                r?.catch?.((e) => console.error("Error in event handler:", e));
             }
             catch (e)
             {

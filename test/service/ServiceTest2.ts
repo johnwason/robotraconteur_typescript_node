@@ -16,8 +16,7 @@
 
 // Port of Core's Python test service, test/python/RobotRaconteurTest/ServiceTest2.py. The fill
 // and verify functions are shared with the client tests in the robotraconteur package.
-// Wires and memories are not ported yet, because robotraconteur-node services do not support them
-// yet.
+// Memories are not ported, because robotraconteur-node services do not support them.
 
 import assert from "node:assert/strict";
 import { RobotRaconteurError, VarValue } from "robotraconteur";
@@ -25,7 +24,8 @@ import { MessageErrorType } from "robotraconteur/internal";
 import * as st from "@shared/test/common/ServiceTest2.js";
 import { getTestVector } from "@shared/test/common/TestVectors.js";
 import { ca, md } from "@shared/test/common/TestUtil.js";
-import type { ServerContext } from "../../src/index.js";
+import { WireBroadcaster, WireUnicastReceiver } from "../../src/index.js";
+import type { ServerContext, WireServer } from "../../src/index.js";
 
 const T3 = "com.robotraconteur.testing.TestService3";
 
@@ -43,11 +43,44 @@ export class testroot3_impl
 {
     private _o5 = new obj5_impl();
     private testenum1 = new Map<string, number>();
+    private _peekwire: WireServer | null = null;
+    private _peekwire_b: WireBroadcaster<number> | null = null;
+    private _pokewire: WireServer | null = null;
+    private _pokewire_r: WireUnicastReceiver<number> | null = null;
 
     RRServiceObjectInit(context: ServerContext): void
     {
         const def = context.node.serviceTypes.get(T3)!;
         for (const v of def.enums.find((e) => e.name === "testenum1")!.values) this.testenum1.set(v.name, v.value);
+        const timer = setInterval(() =>
+        {
+            if (context.isClosed) clearInterval(timer);
+            else this._peekwire_b!.outValue = 56295674;
+        }, 100);
+        timer.unref();
+    }
+
+    get peekwire(): WireServer | null
+    {
+        return this._peekwire;
+    }
+
+    set peekwire(v: WireServer)
+    {
+        this._peekwire = v;
+        this._peekwire_b = new WireBroadcaster<number>(v as WireServer<number>);
+        this._peekwire_b.outValue = 56295674;
+    }
+
+    get pokewire(): WireServer | null
+    {
+        return this._pokewire;
+    }
+
+    set pokewire(v: WireServer)
+    {
+        this._pokewire = v;
+        this._pokewire_r = new WireUnicastReceiver<number>(v as WireServer<number>);
     }
 
     get testenum1_prop(): number

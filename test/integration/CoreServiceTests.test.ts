@@ -35,20 +35,6 @@ import { loadVectors, PYTHON } from "./TestServer.js";
  * is tested by removing its mask. pytest tests are given by function name.
  */
 const MASKED: Record<string, { pytest: string[]; client: string[] }> = {
-    wires: {
-        pytest: ["test_wires", "test_wire_peek_poke"],
-        client: [
-            "ServiceTestClient TestWires",
-            "ServiceTestClient2 TestWirePeekPoke",
-            "broadcast wires stream values",
-            "wires and pipes report misuse",
-            "disconnecting closes wires and pipes and runs their callbacks"
-        ]
-    },
-    pipes: {
-        pytest: ["test_pipes"],
-        client: ["ServiceTestClient TestPipes", "pipe flow control limits a broadcaster until packets are consumed"]
-    },
     memories: {
         pytest: [
             "test_memories",

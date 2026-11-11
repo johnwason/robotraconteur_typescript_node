@@ -20,6 +20,8 @@ import { EventHook } from "./EventHook.js";
 import { GENERATOR_CLOSED_TIMEOUT, GENERATOR_IDLE_TIMEOUT, toServiceGenerator } from "./Generators.js";
 import type { ServiceGenerator } from "./Generators.js";
 import type { ServerContext, ServerEndpoint } from "./ServerContext.js";
+import { PipeServer } from "./Pipe.js";
+import { WireServer } from "./Wire.js";
 
 /** A service object, whose members are accessed by name as in Python */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -72,6 +74,8 @@ export class ServiceSkel
     private members: Map<string, MemberDefinition>;
     private events: [EventHook, (...args: unknown[]) => void][] = [];
     private generators = new Map<number, GeneratorEntry>();
+    private wires = new Map<string, WireServer>();
+    private pipes = new Map<string, PipeServer>();
 
     constructor(readonly context: ServerContext, readonly servicePath: string, readonly obj: ServiceObject, readonly objectType: string)
     {
@@ -93,6 +97,21 @@ export class ServiceSkel
     {
         for (const m of this.entry.members)
         {
+            if (m.kind === "wire")
+            {
+                // Assigned as Python does, so a setter on the object can keep it
+                const w = new WireServer(this, m);
+                this.wires.set(m.name, w);
+                this.obj[m.name] = w;
+                continue;
+            }
+            if (m.kind === "pipe")
+            {
+                const p = new PipeServer(this, m);
+                this.pipes.set(m.name, p);
+                this.obj[m.name] = p;
+                continue;
+            }
             if (m.kind === "callback")
             {
                 const cb = this.obj[m.name] as unknown;
@@ -122,6 +141,47 @@ export class ServiceSkel
         for (const [hook, handler] of this.events) hook.removeHandler(handler);
         this.events = [];
         this.generators.clear();
+        for (const w of this.wires.values()) w.shutdown();
+        for (const p of this.pipes.values()) p.shutdown();
+    }
+
+    /** A client disconnected. Its wire connections and pipe endpoints are closed */
+    clientDisconnected(endpoint: number): void
+    {
+        for (const w of this.wires.values()) w.clientDisconnected(endpoint);
+        for (const p of this.pipes.values()) p.clientDisconnected(endpoint);
+    }
+
+    /** A pipe request: connect or disconnect an endpoint */
+    pipeCommand(e: MessageEntry, ep: ServerEndpoint): Promise<MessageEntry>
+    {
+        this.member(e.memberName, "pipe");
+        return this.pipes.get(e.memberName)!.command(e, ep);
+    }
+
+    /** Packets sent by a client on its pipe endpoints */
+    pipePacketReceived(e: MessageEntry, ep: ServerEndpoint): void
+    {
+        this.pipes.get(e.memberName)?.packetReceived(e, ep);
+    }
+
+    /** Acknowledgements from a client of pipe packets the service sent */
+    pipeAckReceived(e: MessageEntry, ep: ServerEndpoint): void
+    {
+        this.pipes.get(e.memberName)?.ackReceived(e, ep);
+    }
+
+    /** A wire request: connect, disconnect, peek, or poke */
+    wireCommand(e: MessageEntry, ep: ServerEndpoint): Promise<MessageEntry>
+    {
+        this.member(e.memberName, "wire");
+        return this.wires.get(e.memberName)!.command(e, ep);
+    }
+
+    /** A value sent by a client on a wire connection */
+    wirePacketReceived(e: MessageEntry, ep: ServerEndpoint): void
+    {
+        this.wires.get(e.memberName)?.packetReceived(e, ep.localEndpoint);
     }
 
     /** Destroy generators that have not been used for a while, or that belong to a client that left */

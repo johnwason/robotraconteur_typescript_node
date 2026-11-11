@@ -15,16 +15,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // Port of Core's Python test service, test/python/RobotRaconteurTest/ServiceTest.py, in the same
-// order. Values come from Core's test vector blob, as in Core. Pipes, wires, and memories are not
-// ported yet, because robotraconteur-node services do not support them yet.
+// order. Values come from Core's test vector blob, as in Core. Memories are not ported, because
+// robotraconteur-node services do not support them.
 
 import assert from "node:assert/strict";
 import { RobotRaconteurError, VarValue } from "robotraconteur";
 import { MessageErrorType } from "robotraconteur/internal";
 import { getTestVector } from "@shared/test/common/TestVectors.js";
 import { ca, cae, md } from "@shared/test/common/TestUtil.js";
-import { EventHook, ServerEndpoint } from "../../src/index.js";
-import type { Callback, ServerContext } from "../../src/index.js";
+import { EventHook, PipeBroadcaster, ServerEndpoint, WireBroadcaster } from "../../src/index.js";
+import type { Callback, PipeEndpoint, PipeServer, ServerContext, WireConnection, WireServer } from "../../src/index.js";
 
 const T1 = "com.robotraconteur.testing.TestService1";
 const T2 = "com.robotraconteur.testing.TestService2";
@@ -67,10 +67,38 @@ export class testroot_impl
     private context: ServerContext | null = null;
     private service_path = "";
 
+    private _w1: WireServer | null = null;
+    private _w2: WireServer | null = null;
+    private _w3: WireServer | null = null;
+    private _broadcastwire: WireServer | null = null;
+    private _wirebroadcaster: WireBroadcaster<number> | null = null;
+
+    private _p1: PipeServer | null = null;
+    private _p2: PipeServer | null = null;
+    private _broadcastpipe: PipeBroadcaster<number> | null = null;
+    private _packet_sent = false;
+    private _packetnum = 0;
+    private _ack_recv = false;
+
     RRServiceObjectInit(context: ServerContext, service_path: string): void
     {
         this.context = context;
         this.service_path = service_path;
+
+        const timer = setInterval(() =>
+        {
+            if (context.isClosed)
+            {
+                clearInterval(timer);
+                return;
+            }
+            for (let i = 0; i < 100; i++)
+            {
+                this._wirebroadcaster!.outValue = i;
+                void this._broadcastpipe?.sendPacket(i).catch(() => undefined);
+            }
+        }, 25);
+        timer.unref();
     }
 
     get d1(): number
@@ -775,6 +803,123 @@ export class testroot_impl
         else assert.fail("Unknown op number");
     }
 
+    // Pipes. Packets are sent back half a second after they arrive
+
+    get p1(): PipeServer | null
+    {
+        return this._p1;
+    }
+
+    set p1(value: PipeServer)
+    {
+        this._p1 = value;
+        value.pipeConnectCallback = (p) =>
+        {
+            p.requestPacketAck = true;
+            p.packetReceivedEvent.addHandler((e) => this.p1_packet_received(e));
+            p.packetAckReceivedEvent.addHandler((_e, packetnum) =>
+            {
+                if (packetnum === this._packetnum) this._ack_recv = true;
+            });
+        };
+    }
+
+    private async p1_packet_received(p: PipeEndpoint): Promise<void>
+    {
+        await new Promise((r) => setTimeout(r, 500));
+        while (p.available > 0)
+        {
+            const pnum = await p.sendPacket(p.receivePacket());
+            if (!this._packet_sent)
+            {
+                this._packetnum = pnum;
+                this._packet_sent = true;
+            }
+        }
+    }
+
+    get p2(): PipeServer | null
+    {
+        return this._p2;
+    }
+
+    set p2(value: PipeServer)
+    {
+        this._p2 = value;
+        value.pipeConnectCallback = (p) =>
+        {
+            p.packetReceivedEvent.addHandler(async (e) =>
+            {
+                await new Promise((r) => setTimeout(r, 500));
+                while (e.available > 0) await e.sendPacket(e.receivePacket());
+            });
+        };
+    }
+
+    pipe_check_error(): void
+    {
+        assert.ok(this._ack_recv);
+    }
+
+    get broadcastpipe(): PipeServer | null
+    {
+        return (this._broadcastpipe?.pipe as PipeServer | undefined) ?? null;
+    }
+
+    set broadcastpipe(value: PipeServer)
+    {
+        assert.equal(this._broadcastpipe, null, "Pipe already set");
+        this._broadcastpipe = new PipeBroadcaster<number>(value as PipeServer<number>, 3);
+        assert.equal(this._broadcastpipe.maxBacklog, 3);
+    }
+
+    // Wires. Each value a client sends is sent back to it
+
+    get w1(): WireServer | null
+    {
+        return this._w1;
+    }
+
+    set w1(value: WireServer)
+    {
+        this._w1 = value;
+        value.wireConnectCallback = (w) => echo(w);
+    }
+
+    get w2(): WireServer | null
+    {
+        return this._w2;
+    }
+
+    set w2(value: WireServer)
+    {
+        this._w2 = value;
+        value.wireConnectCallback = (w) => echo(w);
+    }
+
+    get w3(): WireServer | null
+    {
+        return this._w3;
+    }
+
+    set w3(value: WireServer)
+    {
+        this._w3 = value;
+        value.wireConnectCallback = (w) => echo(w);
+    }
+
+    get broadcastwire(): WireServer | null
+    {
+        return this._broadcastwire;
+    }
+
+    set broadcastwire(value: WireServer)
+    {
+        assert.equal(this._broadcastwire, null, "Value already set");
+        this._broadcastwire = value;
+        this._wirebroadcaster = new WireBroadcaster<number>(value as WireServer<number>);
+    }
+
     // Callbacks
 
     async test_callbacks(): Promise<void>
@@ -787,6 +932,14 @@ export class testroot_impl
         assert.equal(await this.cb_meaning_of_life.getClientFunction(ep)(), 42);
         await assert.rejects(this.cb_errtest.getClientFunction(ep)());
     }
+}
+
+function echo(w: WireConnection): void
+{
+    w.wireValueChanged.addHandler((c) =>
+    {
+        c.outValue = c.inValue;
+    });
 }
 
 function cached<K, V>(m: Map<K, V>, key: K, create: () => V): V

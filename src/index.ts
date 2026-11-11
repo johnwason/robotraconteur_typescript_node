@@ -16,6 +16,8 @@ export { TcpTransport } from "./transports/TcpTransport.js";
 export { DEFAULT_WEBSOCKET_ALLOWED_ORIGINS, isWebSocketOriginAllowed } from "./transports/TcpServer.js";
 export { Callback } from "./service/Callback.js";
 export { EventHook } from "./service/EventHook.js";
+export { PipeBroadcaster, PipeEndpoint, PipeServer } from "./service/Pipe.js";
+export { WireBroadcaster, WireConnection, WireServer, WireUnicastReceiver } from "./service/Wire.js";
 export { ServerContext, ServerEndpoint } from "./service/ServerContext.js";
 export type { ServerServiceListener } from "./service/ServerContext.js";
 export type { ServiceObject } from "./service/ServiceSkel.js";
