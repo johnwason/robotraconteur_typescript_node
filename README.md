@@ -253,6 +253,8 @@ RR_TEST_SERVER_SCRIPT=test/server/rr_cpp_test_server.py ./scripts/podman-run.sh 
 
 The tests reuse the shared package's client test suite over `rr+tcp` and `rr+ws`, against Core's Python test server by default or its C++ test server when selected as above. `npm run test:extra` connects to public test servers, as Core's extra tests do, so it needs internet access and is not part of `npm test`. It also tests `rrs+tcp` with real node certificates when `RR_NODE_CERTIFICATES` is set to a folder of two or more `{nodeid}.p12` files. Those include private keys, so they are not in this repository. The other `rrs+tcp` tests use a certificate authority made with openssl during the test.
 
+Services are tested with ports of Core's Python test services in `test/service`, which read the same test vector blob as Core. Both the shared package's client tests and Core's own Python test clients run against them (`test/integration/CoreServiceTests.test.ts`). Core's clients come from the Core commit that the blob comes from, which the image and CI check out and `RR_CORE_PYTHON_TESTS` points to. Tests of features that services do not support yet are masked there by feature (Core's with `pytest -k`), so each new feature turns its tests on by removing its mask.
+
 ## License
 
 Apache 2.0
