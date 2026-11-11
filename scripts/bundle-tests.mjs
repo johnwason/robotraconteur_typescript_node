@@ -24,6 +24,12 @@ await build({
     logLevel: "warning",
     // Loaded from node_modules at run time, along with its optional native modules
     external: ["ws"],
+    // The shared tests read Core's test vector blob relative to their own compiled files, which
+    // are not where the bundles are. Give them the blob from the shared repository before any
+    // module runs, through the hook that the browser test page also uses.
+    banner: {
+        js: `globalThis.rr_test_vectors_base64 ??= (await import("node:fs")).readFileSync(${JSON.stringify(join(shared, "test/data/test_vectors.bin"))}).toString("base64");`
+    },
     plugins: [{
         name: "shared-source",
         setup(b)
