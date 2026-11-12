@@ -80,6 +80,24 @@ describe("discovery of services served by robotraconteur-node", { skip: has_link
         await client.disconnectService(r);
     });
 
+    test("a node does not detect itself from its own announcements", { timeout: 30000 }, async () =>
+    {
+        // Announcements loop back to the sending host. Core ignores those with the node's own NodeID
+        const own = new NodeDiscovery(server, server_tcp);
+        await own.start();
+        try
+        {
+            for (let i = 0; i < 10 && !discovery.detectedNodes.some((n) => n.nodeID.equals(server.nodeID)); i++) await discovery.updateDetectedNodes();
+            assert.ok(discovery.detectedNodes.some((n) => n.nodeID.equals(server.nodeID)), "the client did not detect the node");
+            await own.updateDetectedNodes();
+            assert.ok(!own.detectedNodes.some((n) => n.nodeID.equals(server.nodeID)));
+        }
+        finally
+        {
+            own.close();
+        }
+    });
+
     test("the service index reports the services with the URL the client used", async () =>
     {
         const index = await client.connectService(`rr+tcp://127.0.0.1:${server_tcp.listenPort}?service=RobotRaconteurServiceIndex`);

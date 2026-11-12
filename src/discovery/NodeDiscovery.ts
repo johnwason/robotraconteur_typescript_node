@@ -274,6 +274,8 @@ export class NodeDiscovery
 
     private nodeAnnounced(a: NodeAnnouncement): void
     {
+        // The node's own announcements loop back to it. Core ignores them
+        if (a.nodeID.equals(this.node.nodeID)) return;
         const key = a.nodeID.toString();
         const now = Date.now();
         const storage = this.nodes.get(key);
