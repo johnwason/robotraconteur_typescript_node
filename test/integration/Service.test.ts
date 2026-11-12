@@ -20,7 +20,7 @@ import { after, before, describe, test } from "node:test";
 import { promisify } from "node:util";
 import { GeneratorHandle, NamedArrayView, newNamedArrayView, RobotRaconteurError, RobotRaconteurNode, VarValue } from "robotraconteur";
 import type { Endpoint, ITransportConnection, ServiceStub } from "robotraconteur";
-import { isWebSocketOriginAllowed, TcpTransport } from "../../src/index.js";
+import { isWebSocketOriginAllowed, PasswordFileUserAuthenticator, ServiceSecurityPolicy, TcpTransport } from "../../src/index.js";
 import type { ServerContext } from "../../src/index.js";
 import { TEST_SERVICE_DEF, TestRoot } from "./TestService.js";
 import { PYTHON, root } from "./TestServer.js";
@@ -359,6 +359,46 @@ describe("services", () =>
         finally
         {
             await n.shutdown();
+        }
+    });
+
+    test("events are not sent to clients that have not logged in to a service that requires one", async () =>
+    {
+        // A client that connects in separate requests is connected before it logs in, as in Core
+        // ServerContext::SendEvent, which skips clients without an authenticated user
+        class SeparateTcpTransport extends TcpTransport
+        {
+            override async createTransportConnection(u: string, endpoint: Endpoint): Promise<ITransportConnection>
+            {
+                const c = await super.createTransportConnection(u, endpoint);
+                (c as { useCombinedConnection: boolean }).useCombinedConnection = false;
+                return c;
+            }
+        }
+        const auth_obj = new TestRoot();
+        const users = `user1 ${PasswordFileUserAuthenticator.md5Hash("pass1")} _`;
+        const auth_context = server.registerService("test_auth", "experimental.ts_service_test.testroot", auth_obj,
+            new ServiceSecurityPolicy(new PasswordFileUserAuthenticator(users), { requirevaliduser: "true" }));
+        const n = new RobotRaconteurNode();
+        n.registerTransport(new SeparateTcpTransport(n));
+        try
+        {
+            const anon = await n.connectService(url("rr+tcp", "test_auth"));
+            const user = await client.connectService(url("rr+tcp", "test_auth"), "user1", { password: new VarValue("pass1", "string") });
+            assert.equal(auth_context.clientEndpoints.length, 2);
+            const anon_events: unknown[][] = [];
+            anon.addEventListener("ev1", (...args: unknown[]) => anon_events.push(args));
+            const received = new Promise<unknown[]>((resolve) => user.addEventListener("ev1", (...args: unknown[]) => resolve(args)));
+            auth_obj.ev1.fire("secret", 1);
+            assert.deepEqual(await received, ["secret", 1]);
+            await new Promise((r) => setTimeout(r, 200));
+            assert.deepEqual(anon_events, []);
+            await client.disconnectService(user);
+        }
+        finally
+        {
+            await n.shutdown();
+            server.closeService("test_auth");
         }
     });
 

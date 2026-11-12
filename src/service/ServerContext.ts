@@ -719,7 +719,10 @@ export class ServerContext
     /** Send an entry to every connected client, or to those listed */
     sendEvent(e: MessageEntry, endpoints?: number[]): void
     {
-        const targets = endpoints ? endpoints.map((n) => this.clients.get(n)).filter((x) => x !== undefined) : [...this.clients.values()];
+        // As in Core, clients that have not logged in to a service that requires it are skipped
+        const targets = endpoints
+            ? endpoints.map((n) => this.clients.get(n)).filter((x) => x !== undefined)
+            : [...this.clients.values()].filter((c) => !this.requireValidUser || c.authenticatedUser !== null);
         for (const c of targets) c.trySend([e]);
     }
 
