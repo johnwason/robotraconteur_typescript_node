@@ -514,6 +514,36 @@ describe("services", () =>
         }
     });
 
+    test("CreateConnection without a Message Version 2 capability page is accepted, as in Core", async () =>
+    {
+        // Core assumes Message Version 2 unless the client sends a page for it
+        const s = netConnect(tcp.listenPort, "127.0.0.1");
+        s.on("error", () => undefined);
+        await new Promise((r) => s.once("connect", r));
+        let pending = Buffer.alloc(0);
+        const reply = new Promise<Message>((resolve) => s.on("data", (d: Buffer) =>
+        {
+            pending = Buffer.concat([pending, d]);
+            if (pending.length >= 8 && pending.length >= pending.readUInt32LE(4)) resolve(deserializeMessage(new Uint8Array(pending.subarray(0, pending.readUInt32LE(4)))));
+        }));
+        try
+        {
+            const m = new Message();
+            m.header.senderNodeID = NodeID.newUniqueID();
+            const e = new MessageEntry(MessageEntryType.StreamOp, "CreateConnection");
+            e.addElement(new MessageElement("capabilities", DataTypes.uint32_t, Uint32Array.of((TransportCapabilityCode.Message4BasicPage | TransportCapabilityCode.Message4BasicEnable) >>> 0)));
+            m.entries.push(e);
+            s.write(serializeMessage(m));
+            const r = (await reply).entries[0]!;
+            assert.equal(r.error, MessageErrorType.None);
+            assert.deepEqual(r.elements.find((x) => x.elementName === "capabilities")?.data, Uint32Array.of((TransportCapabilityCode.Message2BasicPage | TransportCapabilityCode.Message2BasicEnable) >>> 0));
+        }
+        finally
+        {
+            s.destroy();
+        }
+    });
+
     test("Core's Python client uses the service", { timeout: 60000 }, async () =>
     {
         const script = join(root, "test/server/rr_service_test_client.py");

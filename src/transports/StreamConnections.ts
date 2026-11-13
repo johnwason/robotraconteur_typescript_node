@@ -328,7 +328,8 @@ export class ServerStreamConnection extends StreamConnection implements ServerTr
         const caps = findElement(m.entries[0]!.elements, "capabilities")?.data;
         if (caps instanceof Uint32Array)
         {
-            let message2 = 0;
+            // As in Core, Message Version 2 is assumed unless the client sends a page for it
+            let message2: number = TransportCapabilityCode.Message2BasicEnable;
             for (const cap of caps)
             {
                 if (((cap & TransportCapabilityCode.PageMask) >>> 0) === TransportCapabilityCode.Message2BasicPage)
