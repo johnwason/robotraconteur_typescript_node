@@ -26,11 +26,11 @@ export function userConfigDir(env: NodeJS.ProcessEnv = process.env, platform: No
     const join = platform === "win32" ? win32.join : posix.join;
     if (platform === "win32")
     {
-        return env.ROBOTRACONTEUR_USER_CONFIG_DIR ?? join(env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "RobotRaconteur");
+        return env.ROBOTRACONTEUR_USER_CONFIG_DIR ?? join(env.ROBOTRACONTEUR_USER_LOCALAPPDATA ?? env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "RobotRaconteur");
     }
     if (uid === 0)
     {
-        return env.ROBOTRACONTEUR_SYSTEM_CONFIG_DIR ?? "/etc/robotraconteur";
+        return env.ROBOTRACONTEUR_SYSTEM_CONFIG_DIR ?? join(env.ROBOTRACONTEUR_SYSTEM_PREFIX ?? "/", "etc/robotraconteur");
     }
     if (env.ROBOTRACONTEUR_USER_CONFIG_DIR) return env.ROBOTRACONTEUR_USER_CONFIG_DIR;
     if (env.ROBOTRACONTEUR_USER_HOME) return join(env.ROBOTRACONTEUR_USER_HOME, ".config", "RobotRaconteur");

@@ -31,10 +31,13 @@ test("root uses the system configuration folder", () =>
 {
     assert.equal(userConfigDir({ HOME: "/root", ROBOTRACONTEUR_USER_CONFIG_DIR: "/cfg" }, "linux", 0), "/etc/robotraconteur");
     assert.equal(userConfigDir({ ROBOTRACONTEUR_SYSTEM_CONFIG_DIR: "/sys" }, "linux", 0), "/sys");
+    assert.equal(userConfigDir({ ROBOTRACONTEUR_SYSTEM_PREFIX: "/opt/rr" }, "linux", 0), "/opt/rr/etc/robotraconteur");
+    assert.equal(userConfigDir({ ROBOTRACONTEUR_SYSTEM_PREFIX: "/opt/rr", ROBOTRACONTEUR_SYSTEM_CONFIG_DIR: "/sys" }, "linux", 0), "/sys");
 });
 
 test("the user configuration folder on Windows", () =>
 {
     assert.equal(userConfigDir({ LOCALAPPDATA: "C:/Users/a/AppData/Local" }, "win32", undefined), "C:\\Users\\a\\AppData\\Local\\RobotRaconteur");
     assert.equal(userConfigDir({ LOCALAPPDATA: "C:/x", ROBOTRACONTEUR_USER_CONFIG_DIR: "D:/cfg" }, "win32", undefined), "D:/cfg");
+    assert.equal(userConfigDir({ LOCALAPPDATA: "C:/x", ROBOTRACONTEUR_USER_LOCALAPPDATA: "E:/local" }, "win32", undefined), "E:\\local\\RobotRaconteur");
 });
