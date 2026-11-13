@@ -194,6 +194,12 @@ export class Monitor
         {
             const obj = this.skel.obj;
             if (typeof obj.RobotRaconteurMonitorEnter === "function") await obj.RobotRaconteurMonitorEnter(e.timeout);
+            if (e.error)
+            {
+                // The client stopped waiting while the object was entering its monitor
+                void this.release(e);
+                return;
+            }
             e.acquired = true;
             this.refresh(e);
         }
