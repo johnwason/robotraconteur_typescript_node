@@ -80,6 +80,8 @@ export function parseNodeAnnouncement(packet: string, sender: string): NodeAnnou
     try
     {
         const nodeID = new NodeID(id_line[0]!);
+        // The all-zero NodeID means any node. Core ignores it
+        if (nodeID.isAnyNode) return null;
         const u = parseConnectionUrl(url);
         if (!u.nodeid.equals(nodeID)) return null;
 

@@ -58,6 +58,9 @@ test("announcements that Core rejects are rejected", () =>
     assert.equal(parseNodeAnnouncement(packet("[fe80::1]", "n", BRACED, "11111111-89ab-4def-8123-456789abcdef"), "fe80::1"), null);
     // Global IPv6 addresses and mismatched address families are not accepted
     assert.equal(parseNodeAnnouncement(packet("[2001:db8::1]"), "2001:db8::1"), null);
+    // The all-zero NodeID means any node, which Core ignores (Discovery.cpp NodeDetected)
+    const ZERO = "00000000-0000-0000-0000-000000000000";
+    assert.equal(parseNodeAnnouncement(packet("[fe80::1]", "n", `{${ZERO}}`, ZERO), "fe80::1"), null);
     assert.equal(parseNodeAnnouncement(packet("192.168.1.1"), "fe80::1"), null);
     // Hostnames are not accepted, only addresses
     assert.equal(parseNodeAnnouncement(packet("example.com"), "192.168.1.1"), null);
