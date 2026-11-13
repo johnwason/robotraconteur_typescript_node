@@ -318,7 +318,9 @@ export class ServerStreamConnection extends StreamConnection implements ServerTr
         const node = this.parent.node;
         const h = m.header;
         const for_node = h.receiverNodeID.isAnyNode || h.receiverNodeID.equals(node.nodeID);
-        if (!for_node || (h.receiverNodeName !== "" && h.receiverNodeName !== node.nodeName))
+        // As in Core, a connection that was created keeps the NodeID of its client
+        const same_client = this.remoteNodeID.isAnyNode || this.remoteNodeID.equals(h.senderNodeID);
+        if (!for_node || !same_client || (h.receiverNodeName !== "" && h.receiverNodeName !== node.nodeName))
         {
             throw new RobotRaconteurError(MessageErrorType.NodeNotFound, "RobotRaconteur.NodeNotFound", "Node not found");
         }

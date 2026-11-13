@@ -18,7 +18,8 @@ import { connect as netConnect } from "node:net";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { promisify } from "node:util";
-import { GeneratorHandle, NamedArrayView, newNamedArrayView, RobotRaconteurError, RobotRaconteurNode, VarValue } from "robotraconteur";
+import { GeneratorHandle, NamedArrayView, newNamedArrayView, NodeID, RobotRaconteurError, RobotRaconteurNode, VarValue } from "robotraconteur";
+import { DataTypes, deserializeMessage, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, serializeMessage, TransportCapabilityCode } from "robotraconteur/internal";
 import type { Endpoint, ITransportConnection, ServiceStub } from "robotraconteur";
 import { isWebSocketOriginAllowed, PasswordFileUserAuthenticator, ServiceSecurityPolicy, TcpTransport } from "../../src/index.js";
 import type { ServerContext } from "../../src/index.js";
@@ -467,6 +468,50 @@ describe("services", () =>
         assert.match(await result("HELLO"), /404/);
         // Nothing sent at all, so the handshake times out
         assert.equal(await result(null), "");
+    });
+
+    test("a second CreateConnection cannot change the NodeID of a connection", async () =>
+    {
+        // As in Core, the NodeID is only set while it is Any or unchanged
+        const s = netConnect(tcp.listenPort, "127.0.0.1");
+        s.on("error", () => undefined);
+        await new Promise((r) => s.once("connect", r));
+        const replies: Message[] = [];
+        let pending = Buffer.alloc(0);
+        let wake = () => {};
+        s.on("data", (d: Buffer) =>
+        {
+            pending = Buffer.concat([pending, d]);
+            while (pending.length >= 8 && pending.length >= pending.readUInt32LE(4))
+            {
+                const n = pending.readUInt32LE(4);
+                replies.push(deserializeMessage(new Uint8Array(pending.subarray(0, n))));
+                pending = pending.subarray(n);
+            }
+            wake();
+        });
+        const createConnection = async (id: NodeID) =>
+        {
+            const m = new Message();
+            m.header.senderNodeID = id;
+            const e = new MessageEntry(MessageEntryType.StreamOp, "CreateConnection");
+            e.addElement(new MessageElement("capabilities", DataTypes.uint32_t, Uint32Array.of((TransportCapabilityCode.Message2BasicPage | TransportCapabilityCode.Message2BasicEnable) >>> 0)));
+            m.entries.push(e);
+            s.write(serializeMessage(m));
+            while (replies.length === 0) await new Promise<void>((r) => (wake = r));
+            return replies.shift()!.entries[0]!.error;
+        };
+        try
+        {
+            const id = NodeID.newUniqueID();
+            assert.equal(await createConnection(id), MessageErrorType.None);
+            assert.equal(await createConnection(id), MessageErrorType.None);
+            assert.equal(await createConnection(NodeID.newUniqueID()), MessageErrorType.NodeNotFound);
+        }
+        finally
+        {
+            s.destroy();
+        }
     });
 
     test("Core's Python client uses the service", { timeout: 60000 }, async () =>
