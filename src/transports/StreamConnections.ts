@@ -281,7 +281,6 @@ export class ServerStreamConnection extends StreamConnection implements ServerTr
         }
     }
 
-    /** Accept CreateConnection for this node, agreeing on the capabilities both sides support, as Core does */
     /**
      * Answer STARTTLS and switch to TLS, as Core does. The reply is written before the switch, and
      * the TLS socket takes the incoming data from then on. Returns true once the reply is sent
@@ -312,6 +311,7 @@ export class ServerStreamConnection extends StreamConnection implements ServerTr
         return true;
     }
 
+    /** Accept CreateConnection for this node, agreeing on the capabilities both sides support, as Core does */
     private createConnectionForClient(m: Message, ret: MessageEntry): void
     {
         if (this.requireTls && !this.secure) throw connectionError("Service requires TLS");

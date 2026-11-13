@@ -27,7 +27,6 @@ import { ServerStreamConnection } from "./StreamConnections.js";
 /** The port of the Robot Raconteur port sharer, which a service must not listen on */
 const PORT_SHARER_PORT = 48653;
 
-/** Origins that may connect with a WebSocket, the defaults of Core */
 /**
  * The host and port of the local end of an accepted socket, as Core reports it to the service
  * index, with IPv6 addresses in brackets without a scope
@@ -129,10 +128,10 @@ export class TcpServer
         return this.port;
     }
 
-    /** Listen on all addresses, or only on loopback. Port 0 picks a free port */
     /** Set if the server only accepts connections from this computer */
     localhostOnly = false;
 
+    /** Listen on all addresses, or only on loopback. Port 0 picks a free port */
     async start(port: number, localhost_only: boolean): Promise<void>
     {
         this.localhostOnly = localhost_only;
@@ -278,7 +277,7 @@ export class TcpServer
         }
     }
 
-    /** Check the request as Core does, then accept the WebSocket */
+    /** Stop listening for connections */
     close(): void
     {
         for (const s of this.servers) s.close();

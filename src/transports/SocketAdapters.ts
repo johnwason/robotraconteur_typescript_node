@@ -57,7 +57,6 @@ export class TcpSocketAdapter implements SocketAdapter
     }
 }
 
-/** The parts of a WebSocket from the ws package that are used, so that its types are not needed by users */
 /**
  * What the transport uses of a WebSocket from the ws library. A server's WebSocket must also be an
  * EventEmitter with its message, error, and close events

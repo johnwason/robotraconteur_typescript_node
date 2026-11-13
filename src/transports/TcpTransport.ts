@@ -308,7 +308,6 @@ function openSocket(host: string, port: number, timeout: number): Promise<Socket
     });
 }
 
-/** A link-local address without a scope may be reachable through any interface, so all are tried */
 /**
  * The addresses to try for a host. Like Core, a name is resolved and every address is tried, since
  * a server may listen on only one of the addresses a name resolves to, such as 127.0.0.1 for localhost.
@@ -336,6 +335,7 @@ async function candidateHosts(url_host: string): Promise<string[]>
     }
     if (!isIPv6(host) || !isIPv6LinkLocal(host) || host.includes("%")) return [host];
 
+    // A link-local address without a scope may be reachable through any interface, so all are tried
     const scopes = new Set<string>();
     for (const [name, addresses] of Object.entries(networkInterfaces()))
     {
