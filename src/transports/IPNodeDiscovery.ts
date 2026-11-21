@@ -58,7 +58,9 @@ function hostFamilyMatches(host: string, sender: string): boolean
 {
     const family = isIP(host);
     if (family === 0) return false;
-    if (isLoopback(host)) return true;
+    // A loopback URL is only accepted from a loopback sender, otherwise a LAN host could make
+    // subscribers connect to their own loopback ports
+    if (isLoopback(host)) return isLoopback(sender);
     if (family !== isIP(sender)) return false;
     if (family === 6) return isIPv6LinkLocal(host) || isIPv6SiteLocal(host);
     const a = host.split(".");
