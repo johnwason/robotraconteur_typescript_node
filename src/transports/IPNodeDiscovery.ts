@@ -94,7 +94,7 @@ export function parseNodeAnnouncement(packet: string, sender: string): NodeAnnou
         for (const line of lines.slice(3))
         {
             const m = /^\s*([\w+.-]+)\s*:\s*(.*?)\s*$/.exec(line);
-            if (m && m[1] === "ServiceStateNonce" && m[2]!.length < 32) serviceStateNonce = m[2]!;
+            if (m && m[1] === "ServiceStateNonce" && m[2]!.length <= 32) serviceStateNonce = m[2]!;
         }
 
         const name = id_line[1] ?? "";

@@ -81,3 +81,10 @@ test("loopback announcements from other hosts are rejected", () =>
     assert.equal(parseNodeAnnouncement(packet("[::1]"), "fe80::1"), null);
     assert.equal(parseNodeAnnouncement(packet("[::1]"), "fe80::1%eth0"), null);
 });
+
+test("a ServiceStateNonce of up to 32 characters is accepted, as in Core", () =>
+{
+    const p = (nonce: string) => `${MAGIC}\n${BRACED},n\nrr+tcp://[fe80::1]:22222/?nodeid=${ID}&service=RobotRaconteurServiceIndex\nServiceStateNonce: ${nonce}\n`;
+    assert.equal(parseNodeAnnouncement(p("a".repeat(32)), "fe80::1")?.serviceStateNonce, "a".repeat(32));
+    assert.equal(parseNodeAnnouncement(p("a".repeat(33)), "fe80::1")?.serviceStateNonce, "");
+});
