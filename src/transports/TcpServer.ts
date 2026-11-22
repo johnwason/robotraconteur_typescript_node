@@ -264,7 +264,7 @@ export class TcpServer
                     res.writeHead(404);
                     res.end();
                 });
-                this.http.on("upgrade", (req: IncomingMessage, s: Duplex, h: Buffer) => void this.parent.serveUpgrade(req, s, h, false));
+                this.http.on("upgrade", (req: IncomingMessage, s: Duplex, h: Buffer) => void this.parent.serveUpgrade(req, s, h, false).catch(() => s.destroy()));
                 this.http.on("clientError", (_e, s: Duplex) => s.destroy());
             }
             socket.unshift(head);
