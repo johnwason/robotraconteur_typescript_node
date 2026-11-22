@@ -59,6 +59,8 @@ interface GeneratorEntry
     member: MemberDefinition;
     /** The generator is destroyed if it is not used again by this time */
     expires: number;
+    /** Set once the client closed or aborted it, or it ended or failed */
+    finished?: boolean;
 }
 
 /**
@@ -158,7 +160,7 @@ export class ServiceSkel
         this.released = true;
         for (const [hook, handler] of this.events) hook.removeHandler(handler);
         this.events = [];
-        this.generators.clear();
+        for (const [i, g] of [...this.generators]) this.dropGenerator(i, g);
         for (const w of this.wires.values()) w.shutdown();
         for (const p of this.pipes.values()) p.shutdown();
         this.monitor.shutdown();
@@ -209,8 +211,18 @@ export class ServiceSkel
     {
         for (const [i, g] of this.generators)
         {
-            if (now > g.expires || (endpoints && !endpoints.has(g.endpoint))) this.generators.delete(i);
+            if (now > g.expires || (endpoints && !endpoints.has(g.endpoint))) this.dropGenerator(i, g);
         }
+    }
+
+    /**
+     * Destroy a generator. One the client never closed or aborted is aborted, so a JavaScript
+     * generator's finally blocks run (in Core the C++ destructor frees its resources)
+     */
+    private dropGenerator(index: number, g: GeneratorEntry): void
+    {
+        this.generators.delete(index);
+        if (!g.finished) void g.generator.abort().catch(() => undefined);
     }
 
     private member(name: string, kind: MemberKind): MemberDefinition
@@ -307,6 +319,7 @@ export class ServiceSkel
         {
             if (e.error !== MessageErrorType.None)
             {
+                g.finished = true;
                 if (e.error === MessageErrorType.StopIteration) await g.generator.close();
                 else await g.generator.abort();
                 r.addElement(new MessageElement("return", DataTypes.int32_t, Int32Array.of(0)));
@@ -324,6 +337,7 @@ export class ServiceSkel
         }
         catch (err)
         {
+            g.finished = true;
             this.generators.delete(index);
             throw err;
         }

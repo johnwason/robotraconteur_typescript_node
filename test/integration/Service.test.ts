@@ -519,6 +519,42 @@ describe("services", () =>
         }
     });
 
+    test("a generator the client did not close is aborted when it is destroyed", async () =>
+    {
+        let finish = () => {};
+        const finished = new Promise<void>((resolve) => (finish = resolve));
+        class GenRoot extends TestRoot
+        {
+            override async *count_to(n: number): AsyncGenerator<number>
+            {
+                try
+                {
+                    for (let i = 0; i < n; i++) yield i;
+                }
+                finally
+                {
+                    finish();
+                }
+            }
+        }
+        const gen_context = server.registerService("test_gen_drop", "experimental.ts_service_test.testroot", new GenRoot());
+        try
+        {
+            const c = await client.connectService(url("rr+tcp", "test_gen_drop"));
+            const g = await c.callGenerator<number>("count_to", [5]);
+            assert.equal(await c.callFunctionGenNext(g), 0);
+            // The generator expires without the client closing it
+            (await gen_context.getObjectSkel("test_gen_drop")).cleanupGenerators(Date.now() + 3600000);
+            const ran = await Promise.race([finished.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 5000))]);
+            assert.ok(ran, "the generator's finally block ran");
+            await client.disconnectService(c);
+        }
+        finally
+        {
+            server.closeService("test_gen_drop");
+        }
+    });
+
     test("disconnecting removes the client", async () =>
     {
         const c = await client.connectService(url());
