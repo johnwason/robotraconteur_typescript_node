@@ -425,6 +425,33 @@ describe("services", () =>
         }
     });
 
+    test("another client of the same user cannot release a client lock", async () =>
+    {
+        const users = `user1 ${PasswordFileUserAuthenticator.md5Hash("pass1")} objectlock`;
+        const lock_context = server.registerService("test_lock_session", "experimental.ts_service_test.testroot", new TestRoot(),
+            new ServiceSecurityPolicy(new PasswordFileUserAuthenticator(users), { requirevaliduser: "true", allowobjectlock: "true" }));
+        const n = newClientNode();
+        try
+        {
+            const credentials = { password: new VarValue("pass1", "string") };
+            const c1 = await client.connectService(url("rr+tcp", "test_lock_session"), "user1", credentials);
+            const c2 = await n.connectService(url("rr+tcp", "test_lock_session"), "user1", credentials);
+            const o1 = await c1.getObjRef("o1");
+            const o1_2 = await c2.getObjRef("o1");
+            await client.requestObjectLock(o1, "client");
+            await assert.rejects(n.releaseObjectLock(o1_2), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.ObjectLockedError");
+            assert.equal(await lock_context.getObjectLockUsername("test_lock_session.o1"), "user1");
+            await client.releaseObjectLock(o1);
+            assert.equal(await lock_context.getObjectLockUsername("test_lock_session.o1"), "");
+            await client.disconnectService(c1);
+        }
+        finally
+        {
+            await n.shutdown();
+            server.closeService("test_lock_session");
+        }
+    });
+
     test("disconnecting removes the client", async () =>
     {
         const c = await client.connectService(url());

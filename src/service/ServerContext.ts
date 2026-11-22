@@ -606,7 +606,8 @@ export class ServerContext
         if (!lock) return;
         if (lock.rootPath !== path) throw objectLockedError("Cannot release inherited lock");
         if (username !== lock.username && !override) throw objectLockedError("Service locked by user " + lock.username);
-        if (lock.endpoint !== 0 && endpoint !== lock.endpoint && username !== lock.username && !override) throw objectLockedError("Service locked by other session");
+        // A client lock may only be released by its own client (endpoint 0: the service itself)
+        if (lock.endpoint !== 0 && endpoint !== 0 && endpoint !== lock.endpoint && !override) throw objectLockedError("Service locked by other session");
         lock.release();
         this.object_locks.delete(path);
     }
