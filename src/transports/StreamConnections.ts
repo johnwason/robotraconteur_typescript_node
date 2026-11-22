@@ -221,6 +221,13 @@ export class ServerStreamConnection extends StreamConnection implements ServerTr
     protected override routeMessage(m: Message): void
     {
         if (isSpecialRequest(m)) void this.processSpecialRequest(m);
+        else if (![...this.endpoints].some((e) => e.localEndpoint === m.header.receiverEndpoint))
+        {
+            // Only the service endpoints of clients connected over this connection may be addressed, so a
+            // connection cannot use another client's session
+            const r = errorReturnMessage(m, MessageErrorType.InvalidEndpoint, "RobotRaconteur.InvalidEndpoint", "Invalid destination endpoint");
+            if (r.entries.length > 0) this.sendMessage(r);
+        }
         else super.routeMessage(m);
     }
 

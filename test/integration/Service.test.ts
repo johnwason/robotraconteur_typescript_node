@@ -544,6 +544,43 @@ describe("services", () =>
         }
     });
 
+    test("a connection cannot send requests to the endpoint of a client on another connection", async () =>
+    {
+        const n1 = newClientNode();
+        const n2 = newClientNode();
+        try
+        {
+            const c1 = await n1.connectService(url());
+            const c2 = await n2.connectService(url());
+            await c1.callFunction("set_s1", ["mine"]);
+            const closed = new Promise<void>((resolve) => c2.context.addCloseListener(resolve));
+
+            // Over its own connection, the second client addresses the first client's service endpoint
+            const m = new Message();
+            m.header.senderNodeID = n2.nodeID;
+            m.header.receiverNodeID = server.nodeID;
+            m.header.senderEndpoint = c2.context.localEndpoint;
+            m.header.receiverEndpoint = c1.context.remoteEndpoint;
+            const e = new MessageEntry(MessageEntryType.FunctionCallReq, "set_s1");
+            e.servicePath = "test";
+            e.requestID = 1000;
+            e.addElement(MessageElement.string("s", "forged"));
+            m.entries.push(e);
+            c2.context.transportConnection!.sendMessage(m);
+
+            // The request is refused with InvalidEndpoint, which closes the second client
+            const was_closed = await Promise.race([closed.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 5000))]);
+            assert.equal(await c1.callFunction("add", [1, 2]), 3);
+            assert.equal(obj.s1, "mine");
+            assert.ok(was_closed);
+        }
+        finally
+        {
+            await n1.shutdown();
+            await n2.shutdown();
+        }
+    });
+
     test("Core's Python client uses the service", { timeout: 60000 }, async () =>
     {
         const script = join(root, "test/server/rr_service_test_client.py");
