@@ -638,6 +638,9 @@ export class ServerContext
         const path = m.servicePath;
         if (m.memberName.startsWith("Monitor"))
         {
+            // Monitor operations must not bypass requirevaliduser (reachable after a legacy ConnectClient,
+            // which creates the endpoint before authentication)
+            this.checkAuthenticated(ep);
             const skel = await this.getObjectSkel(path);
             const endpoint = ep.localEndpoint;
             if (m.memberName === "MonitorEnter") ret(await skel.monitor.enter(endpoint, (getElement(m.elements, "timeout").data as Int32Array)[0]!));

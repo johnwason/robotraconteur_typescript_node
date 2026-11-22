@@ -452,6 +452,39 @@ describe("services", () =>
         }
     });
 
+    test("clients that have not logged in cannot monitor-lock objects of a service that requires a user", async () =>
+    {
+        // A client that connects in separate requests is connected before it logs in
+        class SeparateTcpTransport extends TcpTransport
+        {
+            override async createTransportConnection(u: string, endpoint: Endpoint): Promise<ITransportConnection>
+            {
+                const c = await super.createTransportConnection(u, endpoint);
+                (c as { useCombinedConnection: boolean }).useCombinedConnection = false;
+                return c;
+            }
+        }
+        const users = `user1 ${PasswordFileUserAuthenticator.md5Hash("pass1")} _`;
+        server.registerService("test_monitor_auth", "experimental.ts_service_test.testroot", new TestRoot(),
+            new ServiceSecurityPolicy(new PasswordFileUserAuthenticator(users), { requirevaliduser: "true" }));
+        const n = new RobotRaconteurNode();
+        n.registerTransport(new SeparateTcpTransport(n));
+        try
+        {
+            const anon = await n.connectService(url("rr+tcp", "test_monitor_auth"));
+            await assert.rejects(n.monitorEnter(anon, 1000), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.PermissionDenied");
+            const user = await client.connectService(url("rr+tcp", "test_monitor_auth"), "user1", { password: new VarValue("pass1", "string") });
+            await client.monitorEnter(user, 1000);
+            await client.monitorExit(user);
+            await client.disconnectService(user);
+        }
+        finally
+        {
+            await n.shutdown();
+            server.closeService("test_monitor_auth");
+        }
+    });
+
     test("disconnecting removes the client", async () =>
     {
         const c = await client.connectService(url());
