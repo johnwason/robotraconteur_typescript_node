@@ -654,6 +654,10 @@ export class ServerContext
             return r;
         }
 
+        if ((m.memberName === "RequestObjectLock" || m.memberName === "RequestClientObjectLock") && !this.allowObjectLock)
+        {
+            throw serviceError(MessageErrorType.PermissionDenied, "PermissionDenied", "Object locking is not enabled for this service");
+        }
         const user = ep.authenticatedUser;
         if (!user) throw serviceError(MessageErrorType.PermissionDenied, "PermissionDenied", "User must be authenticated to lock object");
         if (!user.privileges.includes("objectlock") && !user.privileges.includes("objectlockoverride")) throw objectLockedError("User does not have object locking privileges");

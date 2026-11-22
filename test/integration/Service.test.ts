@@ -485,6 +485,40 @@ describe("services", () =>
         }
     });
 
+    test("objects can be locked only if the allowobjectlock policy is set", async () =>
+    {
+        const users = `user1 ${PasswordFileUserAuthenticator.md5Hash("pass1")} objectlock`;
+        const credentials = { password: new VarValue("pass1", "string") };
+        for (const allow of [false, true])
+        {
+            const name = allow ? "test_lock_allowed" : "test_lock_not_allowed";
+            server.registerService(name, "experimental.ts_service_test.testroot", new TestRoot(),
+                new ServiceSecurityPolicy(new PasswordFileUserAuthenticator(users), allow ? { requirevaliduser: "true", allowobjectlock: "true" } : { requirevaliduser: "true" }));
+            try
+            {
+                const c = await client.connectService(url("rr+tcp", name), "user1", credentials);
+                const o1 = await c.getObjRef("o1");
+                if (allow)
+                {
+                    await client.requestObjectLock(o1, "client");
+                    await client.releaseObjectLock(o1);
+                }
+                else
+                {
+                    for (const flags of ["user", "client"] as const)
+                    {
+                        await assert.rejects(client.requestObjectLock(o1, flags), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.PermissionDenied");
+                    }
+                }
+                await client.disconnectService(c);
+            }
+            finally
+            {
+                server.closeService(name);
+            }
+        }
+    });
+
     test("disconnecting removes the client", async () =>
     {
         const c = await client.connectService(url());
