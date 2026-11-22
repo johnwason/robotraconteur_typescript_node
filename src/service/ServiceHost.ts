@@ -267,7 +267,8 @@ export async function specialRequest(node: RobotRaconteurNode, m: Message, conne
                 const name = findElement(e.elements, "servicename")?.castString() ?? "";
                 const c = findService(node, name);
                 const ep = c.getClient(h.receiverEndpoint);
-                if (!ep) throw new Error("Invalid endpoint");
+                // Only the client's own connection may disconnect it
+                if (!ep || ep.connection !== connection) throw new Error("Invalid endpoint");
                 c.removeClient(ep);
             }
             catch

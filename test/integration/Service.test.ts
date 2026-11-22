@@ -461,6 +461,35 @@ describe("services", () =>
         assert.ok(!context.clientEndpoints.includes(ep));
     });
 
+    test("a connection cannot disconnect a client that uses another connection", async () =>
+    {
+        const n = newClientNode();
+        try
+        {
+            const c1 = await client.connectService(url());
+            const c2 = await n.connectService(url());
+            const m = new Message();
+            m.header.senderNodeID = n.nodeID;
+            m.header.receiverNodeID = server.nodeID;
+            m.header.senderEndpoint = c2.context.localEndpoint;
+            m.header.receiverEndpoint = c1.context.remoteEndpoint;
+            const e = new MessageEntry(MessageEntryType.DisconnectClient, "");
+            e.requestID = 1000;
+            e.addElement(MessageElement.string("servicename", "test"));
+            m.entries.push(e);
+            c2.context.transportConnection!.sendMessage(m);
+            // Requests on one connection are served in order, so the DisconnectClient has been handled
+            assert.equal(await c2.callFunction("add", [1, 2]), 3);
+            assert.ok(context.clientEndpoints.includes(c1.context.remoteEndpoint));
+            assert.equal(await c1.callFunction("add", [2, 3]), 5);
+            await client.disconnectService(c1);
+        }
+        finally
+        {
+            await n.shutdown();
+        }
+    });
+
     test("a client cannot connect to a service that does not exist", async () =>
     {
         await assert.rejects(client.connectService(url("rr+tcp", "nothing")), (e: RobotRaconteurError) => e.errorName.startsWith("RobotRaconteur.ServiceNotFound"));
