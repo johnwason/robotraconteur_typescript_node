@@ -80,11 +80,11 @@ const webSocketLookup = ((hostname: string, options: LookupOptions, callback: (e
     else callback(null, addresses[0]!.address, addresses[0]!.family);
 }) as LookupFunction;
 
-async function openWebSocket(url: string, timeout: number, options: WebSocketClientOptions, events: SocketEvents): Promise<SocketAdapter>
+async function openWebSocket(url: string, timeout: number, max_payload: number, options: WebSocketClientOptions, events: SocketEvents): Promise<SocketAdapter>
 {
     // Loaded only when needed, so that rr+tcp works without it
     const { WebSocket } = await import("ws");
-    const ws = new WebSocket(url, WEBSOCKET_PROTOCOL, { lookup: webSocketLookup, ...options, handshakeTimeout: timeout, perMessageDeflate: false });
+    const ws = new WebSocket(url, WEBSOCKET_PROTOCOL, { lookup: webSocketLookup, ...options, maxPayload: max_payload, handshakeTimeout: timeout, perMessageDeflate: false });
     await new Promise<void>((resolve, reject) =>
     {
         const on_error = (err: Error) =>
@@ -434,7 +434,7 @@ export class TcpTransport implements Transport, TcpServerParent
             if (websocket)
             {
                 const ws_url = url.replace(u.scheme + "://", (u.scheme === "rr+wss" ? "wss" : "ws") + "://");
-                return openWebSocket(ws_url, this.defaultConnectTimeout, this.webSocketOptions, events);
+                return openWebSocket(ws_url, this.defaultConnectTimeout, this.maxMessageSize, this.webSocketOptions, events);
             }
             const socket = await connectAny(await candidateHosts(u.host), u.port, this.defaultConnectTimeout);
             const listeners = { data: (data: Buffer) => events.onData(data), close: () => events.onClose() };
