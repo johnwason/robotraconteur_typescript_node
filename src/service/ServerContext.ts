@@ -39,6 +39,18 @@ export function decodeServicePathIndex(index: string): string
     }
 }
 
+/** Encode an objref index for a service path as Core's encode_index does (lowercase %xx for all but letters and digits) */
+function encodeServicePathIndex(index: string): string
+{
+    let out = "";
+    for (const b of new TextEncoder().encode(index))
+    {
+        const c = String.fromCharCode(b);
+        out += /[a-zA-Z0-9]/.test(c) ? c : "%" + b.toString(16).padStart(2, "0");
+    }
+    return out;
+}
+
 /** The segments of a service path, each a name with an optional objref index */
 export function parseServicePath(path: string): { name: string; index?: string }[]
 {
@@ -399,11 +411,12 @@ export class ServerContext
 
         let skel = this.skels.get(this.serviceName)!;
         let current = this.serviceName;
-        const parts = path.split(".");
         for (let i = 1; i < segments.length; i++)
         {
             const parent = skel;
-            current = current + "." + parts[i]!;
+            // Key skels by the canonical spelling of the path, so obj[1] and obj[%31] are one skel (one lock)
+            const seg_i = segments[i]!;
+            current = current + "." + seg_i.name + (seg_i.index === undefined ? "" : `[${encodeServicePathIndex(seg_i.index)}]`);
             const known = this.skels.get(current);
             if (known)
             {

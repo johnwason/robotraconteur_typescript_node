@@ -659,6 +659,22 @@ describe("services", () =>
         }
     });
 
+    test("every spelling of an objref index gives the one object at the canonical path", async () =>
+    {
+        // As Core's encode_index: obj[1] and obj[%31] must not be two skels (two locks) for one object
+        const c = await client.connectService(url());
+        try
+        {
+            assert.equal(await (await c.context.findObjRef("test.o2[1]")).callFunction("path"), "test.o2[1]");
+            assert.equal(await (await c.context.findObjRef("test.o2[%31]")).callFunction("path"), "test.o2[1]");
+            assert.equal(await (await c.context.findObjRef("test.o3[a%2Eb]")).callFunction("path"), "test.o3[a%2eb]");
+        }
+        finally
+        {
+            await client.disconnectService(c);
+        }
+    });
+
     test("Core's Python client uses the service", { timeout: 60000 }, async () =>
     {
         const script = join(root, "test/server/rr_service_test_client.py");
