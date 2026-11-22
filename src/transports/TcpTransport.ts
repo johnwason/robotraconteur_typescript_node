@@ -549,7 +549,16 @@ export class TcpTransport implements Transport, TcpServerParent
         let path = "/";
         if (url !== "")
         {
-            const u = new URL(url);
+            let u: URL;
+            try
+            {
+                u = new URL(url);
+            }
+            catch
+            {
+                ws.terminate();
+                throw new RobotRaconteurError(MessageErrorType.InvalidArgument, "RobotRaconteur.InvalidArgument", `Invalid WebSocket URL: ${url}`);
+            }
             scheme = /^(wss|https|rr\+wss):$/.test(u.protocol) ? "rr+wss" : "rr+ws";
             host = u.host;
             path = u.pathname;

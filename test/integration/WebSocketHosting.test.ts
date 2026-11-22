@@ -17,6 +17,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import type { Server as HttpServer } from "node:http";
@@ -24,7 +25,7 @@ import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, test } from "node:test";
 import { promisify } from "node:util";
-import { RobotRaconteurNode } from "robotraconteur";
+import { RobotRaconteurError, RobotRaconteurNode } from "robotraconteur";
 import { WebSocketServer } from "ws";
 import { ServerEndpoint, TcpTransport } from "../../src/index.js";
 import { TestCertificates } from "../common/TestCertificates.js";
@@ -164,6 +165,14 @@ describe("WebSockets accepted by the application's web server", () =>
         const services = await index.callFunction("GetLocalNodeServices") as Map<number, { Name: string; ConnectionURL: Map<number, string> }>;
         assert.ok([...services.values()].find((x) => x.Name === "testobj")!.ConnectionURL.get(1)!.startsWith(`rr+ws://127.0.0.1:${own_port}/rr?nodeid=`));
         await client.disconnectService(index);
+    });
+
+    test("acceptWebSocket closes a WebSocket given an invalid URL", async () =>
+    {
+        let terminated = 0;
+        const ws = Object.assign(new EventEmitter(), { terminate: () => void terminated++ });
+        await assert.rejects(tcp.acceptWebSocket(ws as unknown as Parameters<typeof tcp.acceptWebSocket>[0], "not a url"), (e: RobotRaconteurError) => e.errorName === "RobotRaconteur.InvalidArgument");
+        assert.equal(terminated, 1);
     });
 
     test("Core's Python client connects to the site", { timeout: 60000 }, async () =>
