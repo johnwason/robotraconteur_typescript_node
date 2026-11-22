@@ -446,12 +446,12 @@ export class ServerContext
     private releaseClientLocks(ep: ServerEndpoint): void
     {
         const username = ep.authenticatedUser?.username;
-        if (username === undefined) return;
-        const last = ![...this.clients.values()].some((c) => c.authenticatedUser?.username === username);
+        const last = username !== undefined && ![...this.clients.values()].some((c) => c.authenticatedUser?.username === username);
         for (const [path, lock] of [...this.object_locks])
         {
-            if (lock.username !== username) continue;
-            if (lock.endpoint === ep.localEndpoint || (lock.endpoint === 0 && last))
+            // Client locks of this endpoint go whatever user it is logged in as now (it may have logged
+            // out or in again); user locks when the user's last client leaves
+            if (lock.endpoint === ep.localEndpoint || (lock.endpoint === 0 && lock.username === username && last))
             {
                 lock.release();
                 this.object_locks.delete(path);

@@ -403,6 +403,28 @@ describe("services", () =>
         }
     });
 
+    test("a client lock is released when its client disconnects after logging out", async () =>
+    {
+        // As Core: client locks are released by endpoint, not by the endpoint's current user
+        const users = `user1 ${PasswordFileUserAuthenticator.md5Hash("pass1")} objectlock`;
+        const lock_context = server.registerService("test_lock_logout", "experimental.ts_service_test.testroot", new TestRoot(),
+            new ServiceSecurityPolicy(new PasswordFileUserAuthenticator(users), { requirevaliduser: "true", allowobjectlock: "true" }));
+        try
+        {
+            const c = await client.connectService(url("rr+tcp", "test_lock_logout"), "user1", { password: new VarValue("pass1", "string") });
+            const o1 = await c.getObjRef("o1");
+            await client.requestObjectLock(o1, "client");
+            assert.equal(await lock_context.getObjectLockUsername("test_lock_logout.o1"), "user1");
+            lock_context.getClient(c.context.remoteEndpoint)!.logoutUser();
+            await client.disconnectService(c);
+            assert.equal(await lock_context.getObjectLockUsername("test_lock_logout.o1"), "");
+        }
+        finally
+        {
+            server.closeService("test_lock_logout");
+        }
+    });
+
     test("disconnecting removes the client", async () =>
     {
         const c = await client.connectService(url());
