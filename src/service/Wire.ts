@@ -574,11 +574,7 @@ export class WireUnicastReceiver<T = unknown>
         {
             throw memberError(MessageErrorType.WriteOnlyMember, "WriteOnlyMember", "Write only wire");
         };
-        wire.peekOutValueCallback = () =>
-        {
-            if (!this.in_value) throw valueNotSet();
-            return this.in_value.value;
-        };
+        wire.peekOutValueCallback = () => this.inValue;
         wire.pokeOutValueCallback = (value, timestamp, endpoint) => this.received(value, timestamp, endpoint);
     }
 
