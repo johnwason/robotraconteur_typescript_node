@@ -54,7 +54,7 @@ object testroot
     ## Add two numbers
     function double add(double a, double b)
     function double add_slowly(double a, double b)
-    function void set_s1(string s)
+    function void change_s1(string s)
     function point make_point(double x, double y)
     function void fail_rr(string message)
     function void fail_plain(string message)
@@ -78,8 +78,8 @@ object testroot
     wire double wpoke [writeonly]
     pipe double pp
     function void reset_wires()
-    function void set_w(double v)
-    function double get_wpoke()
+    function void change_w(double v)
+    function double read_wpoke()
     function int32 close_pipes()
     property vec[] vecs
     function double sum_x(vec[] v)
@@ -196,12 +196,12 @@ export class TestRoot
         this.wpoke_r = new WireUnicastReceiver(this.wpoke);
     }
 
-    set_w(v: number): void
+    change_w(v: number): void
     {
         this.w_b.outValue = v;
     }
 
-    get_wpoke(): number
+    read_wpoke(): number
     {
         return this.wpoke_r.inValue;
     }
@@ -244,7 +244,7 @@ export class TestRoot
         return a + b;
     }
 
-    set_s1(s: string): void
+    change_s1(s: string): void
     {
         this.s1 = s;
     }

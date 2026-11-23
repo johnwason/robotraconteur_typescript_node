@@ -52,7 +52,7 @@ def main():
         # Functions
         assert c.add(2.0, 3.0) == 5.0
         assert c.add_slowly(1.0, 2.0) == 3.0
-        c.set_s1("from python")
+        c.change_s1("from python")
         assert c.s1 == "from python"
         pt = c.make_point(4.0, 5.0)
         assert pt.x == 4.0 and pt.y == 5.0

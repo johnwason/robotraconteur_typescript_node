@@ -119,7 +119,7 @@ describe("services", () =>
                 assert.equal(await c.callFunction("add", [2, 3]), 5);
                 assert.equal(await c.callFunction("add", { b: 10, a: 1 }), 11);
                 assert.equal(await c.callFunction("add_slowly", [1, 1]), 2);
-                assert.equal(await c.callFunction("set_s1", ["changed"]), undefined);
+                assert.equal(await c.callFunction("change_s1", ["changed"]), undefined);
                 assert.equal(obj.s1, "changed");
                 assert.deepEqual({ ...(await c.callFunction("make_point", [5, 6]) as object) }, { x: 5, y: 6 });
             });
@@ -194,7 +194,7 @@ describe("services", () =>
                 const named = (name: string) => (e: RobotRaconteurError) => e.errorName === "RobotRaconteur." + name;
                 await c.callFunction("reset_wires");
                 await assert.rejects(c.peekWireInValue("w"), named("ValueNotSet"));
-                await c.callFunction("set_w", [2.5]);
+                await c.callFunction("change_w", [2.5]);
                 assert.equal((await c.peekWireInValue("w")).value, 2.5);
                 await assert.rejects(c.pokeWireOutValue("w", 1), named("ReadOnlyMember"));
 
@@ -203,19 +203,19 @@ describe("services", () =>
                 assert.ok(await c.waitWireInValueValid(w, 5000));
                 assert.equal(c.getWireInValue(w).value, 2.5);
                 const next = new Promise<unknown>((resolve) => c.addWireValueChangedListener(w, (_h, v) => resolve(v)));
-                await c.callFunction("set_w", [3.5]);
+                await c.callFunction("change_w", [3.5]);
                 assert.equal(await next, 3.5);
                 await c.closeWire(w);
 
-                await assert.rejects(c.callFunction("get_wpoke"), named("ValueNotSet"));
+                await assert.rejects(c.callFunction("read_wpoke"), named("ValueNotSet"));
                 await assert.rejects(c.peekWireInValue("wpoke"), named("WriteOnlyMember"));
                 await c.pokeWireOutValue("wpoke", 4);
-                assert.equal(await c.callFunction("get_wpoke"), 4);
+                assert.equal(await c.callFunction("read_wpoke"), 4);
                 assert.equal((await c.peekWireOutValue("wpoke")).value, 4);
                 const wp = await c.connectWire("wpoke");
                 c.setWireOutValue(wp, 5);
                 await new Promise((r) => setTimeout(r, 200));
-                assert.equal(await c.callFunction("get_wpoke"), 5);
+                assert.equal(await c.callFunction("read_wpoke"), 5);
                 await c.closeWire(wp);
             });
 
@@ -760,7 +760,7 @@ describe("services", () =>
         {
             const c1 = await n1.connectService(url());
             const c2 = await n2.connectService(url());
-            await c1.callFunction("set_s1", ["mine"]);
+            await c1.callFunction("change_s1", ["mine"]);
             const closed = new Promise<void>((resolve) => c2.context.addCloseListener(resolve));
 
             // Over its own connection, the second client addresses the first client's service endpoint
@@ -769,7 +769,7 @@ describe("services", () =>
             m.header.receiverNodeID = server.nodeID;
             m.header.senderEndpoint = c2.context.localEndpoint;
             m.header.receiverEndpoint = c1.context.remoteEndpoint;
-            const e = new MessageEntry(MessageEntryType.FunctionCallReq, "set_s1");
+            const e = new MessageEntry(MessageEntryType.FunctionCallReq, "change_s1");
             e.servicePath = "test";
             e.requestID = 1000;
             e.addElement(MessageElement.string("s", "forged"));
