@@ -41,16 +41,13 @@ export function urlHost(socket: { localAddress?: string; localPort?: number }): 
 
 /**
  * The origins Core allows to connect with a WebSocket by default: pages loaded from files, and
- * robotraconteur.com. A scheme on its own, such as "https://", allows every origin with it.
+ * https robotraconteur.com. A scheme on its own, such as "https://", allows every origin with it.
+ * Browsers send "null" for pages loaded from local files, and also for sandboxed iframes and data:
+ * pages; remove it from webSocketAllowedOrigins if local files are not needed.
  */
 export const DEFAULT_WEBSOCKET_ALLOWED_ORIGINS: readonly string[] = [
     "null",
     "file://",
-    "chrome-extension://",
-    "http://robotraconteur.com",
-    "http://robotraconteur.com:80",
-    "http://*.robotraconteur.com",
-    "http://*.robotraconteur.com:80",
     "https://robotraconteur.com",
     "https://robotraconteur.com:443",
     "https://*.robotraconteur.com",

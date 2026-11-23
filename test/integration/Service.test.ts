@@ -21,7 +21,7 @@ import { promisify } from "node:util";
 import { GeneratorHandle, NamedArrayView, newNamedArrayView, NodeID, RobotRaconteurError, RobotRaconteurNode, VarValue } from "robotraconteur";
 import { DataTypes, deserializeMessage, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, serializeMessage, TransportCapabilityCode } from "robotraconteur/internal";
 import type { Endpoint, ITransportConnection, ServiceStub } from "robotraconteur";
-import { isWebSocketOriginAllowed, PasswordFileUserAuthenticator, ServiceSecurityPolicy, TcpTransport } from "../../src/index.js";
+import { DEFAULT_WEBSOCKET_ALLOWED_ORIGINS, isWebSocketOriginAllowed, PasswordFileUserAuthenticator, ServiceSecurityPolicy, TcpTransport } from "../../src/index.js";
 import type { ServerContext } from "../../src/index.js";
 import { TEST_SERVICE_DEF, TestRoot } from "./TestService.js";
 import { PYTHON, root } from "./TestServer.js";
@@ -626,6 +626,33 @@ describe("services", () =>
             t.webSocketOptions = { headers: { Origin: "http://example.org" } };
             await assert.rejects(n.connectService(url("rr+ws")), /403/);
             t.webSocketOptions = { headers: { Origin: "https://robotraconteur.com" } };
+            const c = await n.connectService(url("rr+ws"));
+            assert.equal(await c.callFunction("add", [1, 2]), 3);
+        }
+        finally
+        {
+            await n.shutdown();
+        }
+    });
+
+    test("default WebSocket origins allow local files but not every extension or plain http", async () =>
+    {
+        for (const o of ["chrome-extension://abcdef", "http://robotraconteur.com", "http://www.robotraconteur.com:80"])
+        {
+            assert.ok(!isWebSocketOriginAllowed(o, DEFAULT_WEBSOCKET_ALLOWED_ORIGINS), o);
+        }
+        for (const o of ["null", "file://", "https://robotraconteur.com", "https://www.robotraconteur.com:443"])
+        {
+            assert.ok(isWebSocketOriginAllowed(o, DEFAULT_WEBSOCKET_ALLOWED_ORIGINS), o);
+        }
+
+        // A page loaded from a local file (Origin: null) connects to the test service with the defaults
+        const n = new RobotRaconteurNode();
+        const t = new TcpTransport(n);
+        n.registerTransport(t);
+        try
+        {
+            t.webSocketOptions = { headers: { Origin: "null" } };
             const c = await n.connectService(url("rr+ws"));
             assert.equal(await c.callFunction("add", [1, 2]), 3);
         }
