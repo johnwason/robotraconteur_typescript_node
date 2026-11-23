@@ -506,6 +506,8 @@ export class WireBroadcaster<T = unknown>
 
     private connected(c: WireConnection<T>): void
     {
+        // A repeated WireConnectReq from the same client reuses its connection
+        if (this.connections.has(c)) return;
         c.ignoreInValue = true;
         c.wireConnectionClosedCallback = () => this.connections.delete(c);
         if (this.valid) c.outValue = this.out_value!.value;
@@ -580,7 +582,9 @@ export class WireUnicastReceiver<T = unknown>
 
     private connected(c: WireConnection<T>): void
     {
-        if (this.active && this.active !== c) this.active.close();
+        // A repeated WireConnectReq from the same client reuses its connection, which already has a handler
+        if (this.active === c) return;
+        if (this.active) this.active.close();
         this.active = c;
         c.wireConnectionClosedCallback = () =>
         {
