@@ -14,7 +14,7 @@
 
 import { RobotRaconteurNode } from "robotraconteur";
 import type { ServiceDefinition, TypeDefinition, VarValue } from "robotraconteur";
-import { verifyServiceDefinitionOrder } from "robotraconteur/validators";
+import { verifyServiceDefinition, verifyServiceDefinitionOrder } from "robotraconteur/validators";
 import { DataTypes, errorReturnMessage, findElement, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, packElement, TypeContext, unpackElement } from "robotraconteur/internal";
 import { ServerContext, ServerEndpoint } from "./ServerContext.js";
 import { serviceError } from "./ServiceSkel.js";
@@ -380,7 +380,21 @@ const register_service_type = RobotRaconteurNode.prototype.registerServiceType;
 RobotRaconteurNode.prototype.registerServiceType = function (this: RobotRaconteurNode, def: string | ServiceDefinition): ServiceDefinition
 {
     if (typeof def === "string") verifyServiceDefinitionOrder(def);
+    // Verify the definition as Core does when a type is registered (reserved names and prefixes, types, imports),
+    // so an invalid type fails here rather than when a Core client pulls the definition and rejects it
+    const before = new Map(this.serviceTypes);
     const d = register_service_type.call(this, def);
+    try
+    {
+        verifyServiceDefinition(d, [...this.serviceTypes.values()].filter((x) => x !== d));
+    }
+    catch (e)
+    {
+        const prev = before.get(d.name);
+        if (prev) this.serviceTypes.set(d.name, prev);
+        else this.serviceTypes.delete(d.name);
+        throw e;
+    }
     let texts = type_texts.get(this);
     if (!texts)
     {
