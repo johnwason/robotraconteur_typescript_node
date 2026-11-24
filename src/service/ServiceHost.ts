@@ -186,6 +186,14 @@ function connectClient(node: RobotRaconteurNode, c: ServerContext, m: Message, c
  */
 export async function specialRequest(node: RobotRaconteurNode, m: Message, connection: ServerTransportConnection): Promise<Message | null>
 {
+    // A special request must be the only entry in its message (object protocol, "Special Requests"). Anything
+    // else is a protocol violation: close the connection instead of answering it
+    if (m.entries.length !== 1)
+    {
+        connection.close();
+        return null;
+    }
+
     const h = m.header;
     const for_node = (h.receiverNodeID.isAnyNode && (h.receiverNodeName === "" || h.receiverNodeName === node.nodeName)) || h.receiverNodeID.equals(node.nodeID);
     if (!for_node) return errorReturnMessage(m, MessageErrorType.NodeNotFound, "RobotRaconteur.NodeNotFound", "Could not find route to remote node");

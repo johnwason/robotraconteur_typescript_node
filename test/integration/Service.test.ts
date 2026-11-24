@@ -18,9 +18,10 @@ import { connect as netConnect } from "node:net";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { promisify } from "node:util";
-import { GeneratorHandle, NamedArrayView, newNamedArrayView, NodeID, RobotRaconteurError, RobotRaconteurNode, VarValue } from "robotraconteur";
+import { GeneratorHandle, NamedArrayView, newNamedArrayView, NodeID, NodeID as RRNodeID, RobotRaconteurError, RobotRaconteurNode, VarValue } from "robotraconteur";
 import { DataTypes, deserializeMessage, Message, MessageElement, MessageEntry, MessageEntryType, MessageErrorType, serializeMessage, TransportCapabilityCode } from "robotraconteur/internal";
 import type { Endpoint, ITransportConnection, ServiceStub } from "robotraconteur";
+import * as rri from "robotraconteur/internal";
 import { DEFAULT_WEBSOCKET_ALLOWED_ORIGINS, isWebSocketOriginAllowed, PasswordFileUserAuthenticator, ServiceSecurityPolicy, TcpTransport } from "../../src/index.js";
 import type { ServerContext } from "../../src/index.js";
 import { TEST_SERVICE_DEF, TestRoot } from "./TestService.js";
@@ -803,6 +804,91 @@ describe("services", () =>
         {
             await client.disconnectService(c);
         }
+    });
+
+    test("a special request with more than one entry closes the connection", async () =>
+    {
+        // Object protocol, "Special Requests": a special request must be the only entry in its message. Each
+        // entry used to be answered, so one message could make the service build a reply of entries x
+        // definition size
+        const run = async (count: number) =>
+        {
+            const s = netConnect(tcp.listenPort, "127.0.0.1");
+            s.on("error", () => undefined);
+            await new Promise((r) => s.once("connect", r));
+            const replies: rri.Message[] = [];
+            let closed = false;
+            let pending = Buffer.alloc(0);
+            let wake = () => {};
+            s.on("data", (d: Buffer) =>
+            {
+                pending = Buffer.concat([pending, d]);
+                while (pending.length >= 8 && pending.length >= pending.readUInt32LE(4))
+                {
+                    const n = pending.readUInt32LE(4);
+                    replies.push(rri.deserializeMessage(new Uint8Array(pending.subarray(0, n))));
+                    pending = pending.subarray(n);
+                }
+                wake();
+            });
+            s.on("close", () =>
+            {
+                closed = true;
+                wake();
+            });
+            const next = async () =>
+            {
+                const deadline = Date.now() + 5000;
+                while (replies.length === 0 && !closed && Date.now() < deadline)
+                    await new Promise<void>((r) =>
+                    {
+                        wake = r;
+                        setTimeout(r, 100);
+                    });
+                return replies.shift();
+            };
+            const id = RRNodeID.newUniqueID();
+            try
+            {
+                const cc = new rri.Message();
+                cc.header.senderNodeID = id;
+                const e = new rri.MessageEntry(rri.MessageEntryType.StreamOp, "CreateConnection");
+                e.addElement(new rri.MessageElement("capabilities", rri.DataTypes.uint32_t, Uint32Array.of((rri.TransportCapabilityCode.Message2BasicPage | rri.TransportCapabilityCode.Message2BasicEnable) >>> 0)));
+                cc.entries.push(e);
+                s.write(rri.serializeMessage(cc));
+                const cc_ret = await next();
+                assert.equal(cc_ret?.entries[0]!.error, rri.MessageErrorType.None);
+
+                const m = new rri.Message();
+                m.header.senderNodeID = id;
+                m.header.receiverNodeID = server.nodeID;
+                m.header.senderEndpoint = 1234;
+                for (let i = 0; i < count; i++)
+                {
+                    const g = new rri.MessageEntry(rri.MessageEntryType.GetServiceDesc, "");
+                    g.servicePath = "test";
+                    g.requestID = i + 1;
+                    m.entries.push(g);
+                }
+                s.write(rri.serializeMessage(m));
+                const ret = await next();
+                return { ret, closed };
+            }
+            finally
+            {
+                s.destroy();
+            }
+        };
+
+        const one = await run(1);
+        assert.equal(one.ret?.entries.length, 1);
+        assert.equal(one.ret?.entries[0]!.entryType, rri.MessageEntryType.GetServiceDescRet);
+        assert.equal(one.ret?.entries[0]!.error, rri.MessageErrorType.None);
+        assert.equal(one.closed, false);
+
+        const two = await run(2);
+        assert.equal(two.ret, undefined);
+        assert.equal(two.closed, true);
     });
 
     test("Core's Python client uses the service", { timeout: 60000 }, async () =>
