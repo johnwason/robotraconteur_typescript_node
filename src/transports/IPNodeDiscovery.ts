@@ -93,8 +93,12 @@ export function parseNodeAnnouncement(packet: string, sender: string): NodeAnnou
         let serviceStateNonce = "";
         for (const line of lines.slice(3))
         {
-            const m = /^\s*([\w+.-]+)\s*:\s*(.*?)\s*$/.exec(line);
-            if (m && m[1] === "ServiceStateNonce" && m[2]!.length <= 32) serviceStateNonce = m[2]!;
+            // "key: value", split on the first ':' and trimmed. A regex with a lazy value and trailing
+            // whitespace here took quadratic time on long lines of spaces
+            const i = line.indexOf(":");
+            if (i < 0 || line.slice(0, i).trim() !== "ServiceStateNonce") continue;
+            const value = line.slice(i + 1).trim();
+            if (value.length <= 32 && !/[\r\u2028\u2029]/.test(value)) serviceStateNonce = value;
         }
 
         const name = id_line[1] ?? "";
