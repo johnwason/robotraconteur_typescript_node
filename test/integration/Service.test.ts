@@ -891,6 +891,87 @@ describe("services", () =>
         assert.equal(two.closed, true);
     });
 
+    test("malformed pipe packet acknowledgements are ignored and do not stop the service", async () =>
+    {
+        // A void element used to throw outside any catch, and the unhandled rejection stopped the Node process
+        const s = netConnect(tcp.listenPort, "127.0.0.1");
+        s.on("error", () => undefined);
+        await new Promise((r) => s.once("connect", r));
+        const replies: Message[] = [];
+        let pending = Buffer.alloc(0);
+        let wake = () => {};
+        s.on("data", (d: Buffer) =>
+        {
+            pending = Buffer.concat([pending, d]);
+            while (pending.length >= 8 && pending.length >= pending.readUInt32LE(4))
+            {
+                const n = pending.readUInt32LE(4);
+                replies.push(deserializeMessage(new Uint8Array(pending.subarray(0, n))));
+                pending = pending.subarray(n);
+            }
+            wake();
+        });
+        const request = async (m: Message) =>
+        {
+            s.write(serializeMessage(m));
+            while (replies.length === 0) await new Promise<void>((r) => (wake = r));
+            return replies.shift()!;
+        };
+        const id = NodeID.newUniqueID();
+        let remote = 0;
+        const message = (e: MessageEntry) =>
+        {
+            const m = new Message();
+            m.header.senderNodeID = id;
+            m.header.receiverNodeID = server.nodeID;
+            m.header.senderEndpoint = 4321;
+            m.header.receiverEndpoint = remote;
+            e.servicePath = "test";
+            e.requestID = 1;
+            m.entries.push(e);
+            return m;
+        };
+        try
+        {
+            const cc = new Message();
+            cc.header.senderNodeID = id;
+            const e = new MessageEntry(MessageEntryType.StreamOp, "CreateConnection");
+            e.addElement(new MessageElement("capabilities", DataTypes.uint32_t, Uint32Array.of((TransportCapabilityCode.Message2BasicPage | TransportCapabilityCode.Message2BasicEnable) >>> 0)));
+            cc.entries.push(e);
+            assert.equal((await request(cc)).entries[0]!.error, MessageErrorType.None);
+
+            const connected = await request(message(new MessageEntry(MessageEntryType.ConnectClient, "")));
+            assert.equal(connected.entries[0]!.error, MessageErrorType.None);
+            remote = connected.header.senderEndpoint;
+
+            const before_endpoints = new Set(obj.pp!.activeEndpoints);
+            const pc = new MessageEntry(MessageEntryType.PipeConnectReq, "pp");
+            pc.addElement(new MessageElement("index", DataTypes.int32_t, Int32Array.of(-1)));
+            const pr = await request(message(pc));
+            assert.equal(pr.entries[0]!.error, MessageErrorType.None);
+            const index = (pr.entries[0]!.elements[0]!.data as Int32Array)[0]!;
+            const p = obj.pp!.activeEndpoints.find((x) => !before_endpoints.has(x))!;
+            const acks: number[] = [];
+            p.packetAckReceivedEvent.addHandler((_p, n) => acks.push(n));
+
+            const ack = new MessageEntry(MessageEntryType.PipePacketRet, "pp");
+            ack.addElement(new MessageElement(String(index), DataTypes.void_t, null));
+            ack.addElement(new MessageElement(String(index), DataTypes.uint32_t, new Uint32Array(0)));
+            ack.addElement(new MessageElement(String(index), DataTypes.string_t, "x"));
+            ack.addElement(new MessageElement(String(index), DataTypes.uint32_t, Uint32Array.of(7)));
+            s.write(serializeMessage(message(ack)));
+
+            // The service still answers, and only the well formed acknowledgement was delivered
+            const alive = await request(message(new MessageEntry(MessageEntryType.ClientKeepAliveReq, "")));
+            assert.equal(alive.entries[0]!.entryType, MessageEntryType.ClientKeepAliveRet);
+            assert.deepEqual(acks, [7]);
+        }
+        finally
+        {
+            s.destroy();
+        }
+    });
+
     test("Core's Python client uses the service", { timeout: 60000 }, async () =>
     {
         const script = join(root, "test/server/rr_service_test_client.py");

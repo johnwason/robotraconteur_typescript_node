@@ -187,7 +187,9 @@ export class PipeServer<T = unknown>
     {
         for (const el of e.elements)
         {
-            this.endpoints.get(key(ep.localEndpoint, Number(el.elementName)))?.ackReceived((el.data as Uint32Array)[0]!);
+            // The packet number is a uint32, as Core checks. Skip malformed elements
+            if (el.elementType !== DataTypes.uint32_t || !(el.data instanceof Uint32Array) || el.data.length < 1) continue;
+            this.endpoints.get(key(ep.localEndpoint, Number(el.elementName)))?.ackReceived(el.data[0]!);
         }
     }
 

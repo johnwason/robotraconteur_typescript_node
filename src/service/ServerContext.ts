@@ -114,7 +114,8 @@ export class ServerEndpoint implements Endpoint
             this.trySend([r]);
             return;
         }
-        ServerEndpoint.current_storage.run(this, () => void this.context.messageReceived(m, this));
+        // Nothing awaits this, so an error must not become an unhandled rejection, which stops Node
+        ServerEndpoint.current_storage.run(this, () => void this.context.messageReceived(m, this).catch((err: unknown) => console.error("Error processing message from client:", err)));
     }
 
     transportConnectionClosed(): void
