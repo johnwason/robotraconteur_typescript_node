@@ -2,8 +2,18 @@
 
 The API may change in any release before 1.0.
 
-## Unreleased
+## 0.1.1
 
+* Bug fixes in the service (sessions, locks and requests), wires and pipes, transports, discovery and node directories, several of them the same fixes as in Robot Raconteur Core 1.3.0.
+* Behavior changes:
+  * A special request must be the only entry in its message; otherwise the connection is closed.
+  * Service definitions are verified when they are registered, as in Core.
+  * Every spelling of a service path index refers to the same object.
+  * Monitor operations require authentication on services that require a valid user.
+  * The `allowobjectlock` security policy is enforced.
+  * Generators that are destroyed without being closed are aborted.
+  * Reliable pipes keep at most 1024 out-of-order packets.
+  * `chrome-extension://` and plain `http://` origins are no longer allowed by default for WebSocket connections.
 * Export `./package.json`, so that tools can read the package's version with `require("robotraconteur-node/package.json")`.
 
 ## 0.1.0
