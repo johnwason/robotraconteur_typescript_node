@@ -14,6 +14,7 @@ The API may change in any release before 1.0.
   * Generators that are destroyed without being closed are aborted.
   * Reliable pipes keep at most 1024 out-of-order packets.
   * `chrome-extension://` and plain `http://` origins are no longer allowed by default for WebSocket connections.
+* Require robotraconteur 0.1.1 or later as the peer dependency, for its fixes.
 * Export `./package.json`, so that tools can read the package's version with `require("robotraconteur-node/package.json")`.
 
 ## 0.1.0

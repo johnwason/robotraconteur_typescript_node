@@ -56,7 +56,7 @@
         "ws": "8.22.2"
     },
     "peerDependencies": {
-        "robotraconteur": "^0.1.0"
+        "robotraconteur": "^0.1.1"
     },
     "devDependencies": {
         "@types/node": "22.10.2",
